@@ -1,0 +1,13 @@
+[package]
+name = "plane-client"
+description = "Typed client for the Plane project-management API with concurrent relation fetching"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+ureq.workspace = true
+thiserror.workspace = true

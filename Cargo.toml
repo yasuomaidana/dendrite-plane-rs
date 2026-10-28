@@ -1,0 +1,20 @@
+[workspace]
+resolver = "3"
+members = ["crates/plane-client", "crates/dendrite-plane"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/yasuomaidana/dendrite-plane-rs"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = { version = "3", features = ["json"] }
+thiserror = "2"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

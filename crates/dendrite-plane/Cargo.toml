@@ -1,0 +1,20 @@
+[package]
+name = "dendrite-plane"
+description = "JSON-RPC stdio sidecar that gives Dendrite fast, long-lived access to Plane"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+plane-client = { path = "../plane-client" }
+serde.workspace = true
+serde_json.workspace = true
+
+[lib]
+name = "dendrite_plane"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dendrite-plane"
+path = "src/main.rs"
