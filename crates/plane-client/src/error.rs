@@ -17,6 +17,9 @@ pub enum Error {
     TicketNotFound(String),
     #[error("no workflow state matches {0}")]
     StateNotFound(String),
+    /// A create or update the caller must fix: nothing was sent to Plane.
+    #[error("{0}")]
+    Invalid(String),
     #[error("request failed: {0}")]
     Transport(String),
     #[error("could not read Plane's response: {0}")]

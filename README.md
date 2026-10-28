@@ -29,9 +29,9 @@ The token is never defaulted and never sent over the protocol.
 | `DENDRITE_PLANE_RELATIONS_TTL_SECS` | Relations cache lifetime, default 60. |
 | `DENDRITE_PLANE_CACHE_DIR` | When set, the relations cache is also kept in a file there, shared by every process (short-lived CLI runs each start their own sidecar). |
 
-## Protocol 1.0.0
+## Protocol 1.1.0
 
-Every method that touches Plane accepts the optional `base_url`, `workspace` and `project_id`. Errors use JSON-RPC codes `-32700`, `-32600`, `-32601`, `-32602`; engine failures are `-32000` with `data.kind` one of `config`, `unauthorized`, `http`, `not_found`, `transport`, `decode`.
+Every method that touches Plane accepts the optional `base_url`, `workspace` and `project_id`. Errors use JSON-RPC codes `-32700`, `-32600`, `-32601`, `-32602`; engine failures are `-32000` with `data.kind` one of `config`, `unauthorized`, `http`, `not_found`, `invalid`, `transport`, `decode`. Each method has a JSON Schema in [`proto/`](proto/), checked by a test.
 
 | Method | Params | Result |
 |---|---|---|
@@ -40,6 +40,10 @@ Every method that touches Plane accepts the optional `base_url`, `workspace` and
 | `issues.list` | `{fields?: "min"\|"full"}` | `{issues}` |
 | `states.list` | none | `{states}` |
 | `issue.resolve` | `{ref}` | `{issue}`; `ref` is `DEN-n`, the Plane number or the UUID, never matched by substring |
+| `issue.get` | `{ref}` | `{issue}` with description, labels and state detail; a UUID is read directly, `DEN-n` or a Plane number is resolved through one list (1.1) |
+| `issue.create` | `{name, description_html, state?, estimate_point?, priority?, start_date?, target_date?, parent?, external_id?, external_source?, labels?}` | `{issue, created}`; with `external_id` set it is idempotent: an issue already carrying it is returned with `created: false` and nothing is posted (a 409 counts too). Estimates clamp to 0..12; an empty name or description is `invalid` (1.1) |
+| `issue.update` | `{ref, name?, description_html?, state?, estimate_point?, priority?, start_date?, target_date?, parent?}` | `{issue}`; only set fields are sent, empty strings count as unset (1.1) |
+| `issue.comment` | `{ref, comment}` | `{ok}`; the comment is wrapped in `<p>` without escaping, as the Go client did (1.1) |
 | `issue.set_status` | `{ref, status}` | `{issue, state, status}`; resolves against a single issue list |
 | `relations.batch` | `{issue_ids, fresh?}` | `{relations, errors, cached, fetched}` |
 | `cache.invalidate` | `{issue_ids?}` | `{ok}`; empty clears the project's cache. Call it after changing relations |

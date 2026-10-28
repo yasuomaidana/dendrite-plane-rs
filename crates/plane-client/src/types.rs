@@ -26,6 +26,104 @@ pub struct Issue {
     pub external_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description_html: Option<String>,
+    /// Present on single-issue reads and on create/update replies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description_stripped: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_detail: Option<StateDetail>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub label_details: Vec<LabelDetail>,
+}
+
+/// The state Plane embeds in a single-issue read.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct StateDetail {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub group: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LabelDetail {
+    #[serde(default)]
+    pub name: String,
+}
+
+/// Fields for a new issue, as Go's `plane.CreateIssueRequest` minus module and blocker links
+/// (those move with DEN-355 and DEN-356).
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct CreateIssue {
+    pub name: String,
+    #[serde(default)]
+    pub description_html: String,
+    #[serde(default)]
+    pub state: Option<String>,
+    #[serde(default)]
+    pub estimate_point: Option<i64>,
+    #[serde(default)]
+    pub priority: Option<String>,
+    #[serde(default)]
+    pub start_date: Option<String>,
+    #[serde(default)]
+    pub target_date: Option<String>,
+    #[serde(default)]
+    pub parent: Option<String>,
+    #[serde(default)]
+    pub external_id: Option<String>,
+    #[serde(default)]
+    pub external_source: Option<String>,
+    #[serde(default)]
+    pub labels: Vec<String>,
+}
+
+/// Fields to change on an issue; unset ones are left out of the PATCH.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct UpdateIssue {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description_html: Option<String>,
+    #[serde(default)]
+    pub state: Option<String>,
+    #[serde(default)]
+    pub estimate_point: Option<i64>,
+    #[serde(default)]
+    pub priority: Option<String>,
+    #[serde(default)]
+    pub start_date: Option<String>,
+    #[serde(default)]
+    pub target_date: Option<String>,
+    #[serde(default)]
+    pub parent: Option<String>,
+}
+
+/// Go's `plane.IsEmptyContext`: true when a description has no text once tags (`<...>`) and
+/// `&nbsp;` are removed. A `<` with no closing `>` is ordinary text.
+pub fn is_empty_context(html_or_text: &str) -> bool {
+    let mut rest = html_or_text;
+    let mut text = String::with_capacity(rest.len());
+    while let Some(open) = rest.find('<') {
+        text.push_str(&rest[..open]);
+        match rest[open..].find('>') {
+            Some(close) => {
+                text.push(' ');
+                rest = &rest[open + close + 1..];
+            }
+            None => {
+                text.push_str(&rest[open..]);
+                rest = "";
+            }
+        }
+    }
+    text.push_str(rest);
+    text.replace("&nbsp;", " ").trim().is_empty()
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

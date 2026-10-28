@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-plane-rs/proto/health.json",
+  "title": "health",
+  "description": "Handshake. Protocol 1.1.0. Clients refuse a server whose protocol major version differs from theirs. Error kinds: config, unauthorized, http, not_found, invalid, transport, decode.",
+  "params": {
+    "type": ["object", "null"],
+    "additionalProperties": false
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "name",
+      "version",
+      "protocol",
+      "features",
+      "configured"
+    ],
+    "properties": {
+      "name": {
+        "const": "dendrite-plane"
+      },
+      "version": {
+        "type": "string"
+      },
+      "protocol": {
+        "type": "string",
+        "pattern": "^\\d+\\.\\d+\\.\\d+$"
+      },
+      "features": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "configured": {
+        "type": "boolean",
+        "description": "False when the API token is missing; when false, Plane calls fail with error kind config"
+      }
+    }
+  },
+  "$defs": {
+    "error_kind": {
+      "type": "string",
+      "enum": [
+        "config",
+        "unauthorized",
+        "http",
+        "not_found",
+        "invalid",
+        "transport",
+        "decode"
+      ]
+    }
+  }
+}

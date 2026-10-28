@@ -4,12 +4,12 @@
 
 use std::collections::HashMap;
 
-use plane_client::{Client, Config, Error, ListFields, Status};
+use plane_client::{Client, Config, CreateIssue, Error, ListFields, Status, UpdateIssue};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 /// Protocol version. Clients must reject a server whose major version differs from theirs.
-pub const PROTOCOL: &str = "1.0.0";
+pub const PROTOCOL: &str = "1.1.0";
 
 const PARSE_ERROR: i64 = -32700;
 const INVALID_REQUEST: i64 = -32600;
@@ -40,6 +40,7 @@ impl From<Error> for RpcError {
             Error::Unauthorized(_) => "unauthorized",
             Error::Http { .. } => "http",
             Error::TicketNotFound(_) | Error::StateNotFound(_) => "not_found",
+            Error::Invalid(_) => "invalid",
             Error::Transport(_) => "transport",
             Error::Decode(_) => "decode",
         };
@@ -74,6 +75,33 @@ struct RefParams {
     target: Target,
     #[serde(rename = "ref")]
     reference: String,
+}
+
+#[derive(Deserialize)]
+struct CreateParams {
+    #[serde(flatten)]
+    target: Target,
+    #[serde(flatten)]
+    issue: CreateIssue,
+}
+
+#[derive(Deserialize)]
+struct UpdateParams {
+    #[serde(flatten)]
+    target: Target,
+    #[serde(rename = "ref")]
+    reference: String,
+    #[serde(flatten)]
+    changes: UpdateIssue,
+}
+
+#[derive(Deserialize)]
+struct CommentParams {
+    #[serde(flatten)]
+    target: Target,
+    #[serde(rename = "ref")]
+    reference: String,
+    comment: String,
 }
 
 #[derive(Deserialize)]
@@ -265,6 +293,28 @@ impl Server {
                 let issue = plane_client::resolve_issue(&issues, &p.reference)
                     .ok_or_else(|| Error::TicketNotFound(p.reference.clone()))?;
                 Ok(json!({ "issue": issue }))
+            }
+            "issue.get" => {
+                let p: RefParams = parse(params)?;
+                let issue = self.client(&p.target)?.get_issue(&p.reference)?;
+                Ok(json!({ "issue": issue }))
+            }
+            "issue.create" => {
+                let p: CreateParams = parse(params)?;
+                let (issue, created) = self.client(&p.target)?.create_issue(&p.issue)?;
+                Ok(json!({ "issue": issue, "created": created }))
+            }
+            "issue.update" => {
+                let p: UpdateParams = parse(params)?;
+                let issue = self
+                    .client(&p.target)?
+                    .update_issue(&p.reference, &p.changes)?;
+                Ok(json!({ "issue": issue }))
+            }
+            "issue.comment" => {
+                let p: CommentParams = parse(params)?;
+                self.client(&p.target)?.comment(&p.reference, &p.comment)?;
+                Ok(json!({ "ok": true }))
             }
             "issue.set_status" => {
                 let p: SetStatusParams = parse(params)?;

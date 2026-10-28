@@ -3,7 +3,10 @@ mod fake_plane;
 use std::time::{Duration, Instant};
 
 use fake_plane::{Fake, Reply, json};
-use plane_client::{Client, Config, Error, ListFields, RELATION_WORKERS, Status};
+use plane_client::{
+    Client, Config, CreateIssue, Error, ListFields, RELATION_WORKERS, Status, UpdateIssue,
+    is_empty_context,
+};
 
 fn client(fake: &Fake) -> Client {
     Client::new(Config::new(&fake.url, "ws", "proj", "test-key").unwrap())
@@ -372,4 +375,247 @@ fn a_cache_file_is_shared_between_clients_like_two_cli_runs() {
     let third = client(&fake).with_cache_file(file);
     assert_eq!(third.snapshot(false).unwrap().relations_fetched, 1);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+const UUID: &str = "11111111-2222-3333-4444-555555555555";
+
+fn body_of(fake: &Fake, method: &str) -> serde_json::Value {
+    let r = fake
+        .recorded()
+        .into_iter()
+        .find(|r| r.method == method)
+        .unwrap_or_else(|| panic!("no {method} request"));
+    serde_json::from_str(&r.body).unwrap()
+}
+
+fn new_issue(name: &str) -> CreateIssue {
+    CreateIssue {
+        name: name.into(),
+        description_html: "<p>goal</p>".into(),
+        ..CreateIssue::default()
+    }
+}
+
+#[test]
+fn empty_context_matches_the_go_rule() {
+    for empty in [
+        "",
+        "  ",
+        "<p></p>",
+        "<div><p>&nbsp;</p></div>",
+        "<br/> &nbsp; ",
+    ] {
+        assert!(is_empty_context(empty), "{empty:?}");
+    }
+    for filled in ["x", "<p>x</p>", "a < b", "<p>&nbsp;y</p>"] {
+        assert!(!is_empty_context(filled), "{filled:?}");
+    }
+}
+
+#[test]
+fn get_issue_reads_a_uuid_directly_and_resolves_a_ticket_id_through_one_list() {
+    let fake = Fake::start(|req| {
+        if req.path_and_query.contains("per_page=100") {
+            json(&format!(
+                r#"{{"results":[{}],"next_page_results":false,"next_cursor":""}}"#,
+                issue(UUID, 7, "s-todo", "[DEN-7] seven")
+            ))
+        } else {
+            json(&format!(
+                r#"{{"id":"{UUID}","name":"[DEN-7] seven","description_stripped":"body",
+                "state_detail":{{"name":"To Do","group":"unstarted"}},
+                "label_details":[{{"name":"bug"}}]}}"#
+            ))
+        }
+    });
+    let c = client(&fake);
+    let got = c.get_issue("DEN-7").unwrap();
+    assert_eq!(got.description_stripped.as_deref(), Some("body"));
+    assert_eq!(got.label_details[0].name, "bug");
+    assert_eq!(got.state_detail.unwrap().group, "unstarted");
+
+    let before = fake.recorded().len();
+    c.get_issue(UUID).unwrap();
+    assert_eq!(fake.recorded().len(), before + 1, "a UUID needs no list");
+}
+
+#[test]
+fn get_issue_maps_404_and_unknown_ids_to_not_found() {
+    let fake = Fake::start(|req| {
+        if req.path_and_query.contains("per_page=100") {
+            json(r#"{"results":[],"next_page_results":false,"next_cursor":""}"#)
+        } else {
+            Reply {
+                status: 404,
+                body: "{}".into(),
+                delay: Duration::ZERO,
+            }
+        }
+    });
+    let c = client(&fake);
+    assert!(matches!(c.get_issue(UUID), Err(Error::TicketNotFound(_))));
+    assert!(matches!(
+        c.get_issue("DEN-9"),
+        Err(Error::TicketNotFound(_))
+    ));
+}
+
+#[test]
+fn create_sends_the_go_body_clamps_the_estimate_and_reports_created() {
+    let fake = Fake::start(|_| json(&format!(r#"{{"id":"{UUID}","name":"n","sequence_id":3}}"#)));
+    let mut req = new_issue("n");
+    req.estimate_point = Some(99);
+    req.priority = Some("high".into());
+    req.start_date = Some("2026-10-27".into());
+    req.labels = vec!["l1".into()];
+    req.state = Some(String::new());
+    let (issue, created) = client(&fake).create_issue(&req).unwrap();
+    assert!(created);
+    assert_eq!(issue.id, UUID);
+
+    let rec = &fake.recorded()[0];
+    assert_eq!(rec.method, "POST");
+    assert_eq!(
+        rec.path_and_query,
+        "/api/v1/workspaces/ws/projects/proj/issues/"
+    );
+    let b = body_of(&fake, "POST");
+    assert_eq!(b["estimate_point"], 12);
+    assert_eq!(b["priority"], "high");
+    assert_eq!(b["start_date"], "2026-10-27");
+    assert_eq!(b["labels"][0], "l1");
+    assert_eq!(b["description_html"], "<p>goal</p>");
+    assert!(b.get("state").is_none(), "an empty state is left out");
+    assert!(b.get("external_id").is_none());
+}
+
+#[test]
+fn create_refuses_an_empty_name_or_description_without_calling_plane() {
+    let fake = Fake::start(|_| json("{}"));
+    let c = client(&fake);
+    assert!(matches!(
+        c.create_issue(&new_issue("  ")),
+        Err(Error::Invalid(_))
+    ));
+    let mut empty = new_issue("n");
+    empty.description_html = "<p>&nbsp;</p>".into();
+    assert!(matches!(c.create_issue(&empty), Err(Error::Invalid(_))));
+    assert!(fake.recorded().is_empty());
+}
+
+#[test]
+fn create_with_a_known_external_id_returns_the_existing_issue_without_posting() {
+    let fake = Fake::start(|req| {
+        assert_eq!(req.method, "GET", "nothing may be posted");
+        json(
+            r#"{"results":[{"id":"old","name":"x","sequence_id":1,"external_id":"OXI-101"}],
+            "next_page_results":false,"next_cursor":""}"#,
+        )
+    });
+    let mut req = new_issue("x");
+    req.external_id = Some("OXI-101".into());
+    let (issue, created) = client(&fake).create_issue(&req).unwrap();
+    assert_eq!((issue.id.as_str(), created), ("old", false));
+}
+
+#[test]
+fn create_treats_a_409_as_an_existing_issue() {
+    let listed = std::sync::atomic::AtomicUsize::new(0);
+    let fake = Fake::start(move |req| {
+        if req.method == "POST" {
+            return Reply {
+                status: 409,
+                body: "{}".into(),
+                delay: Duration::ZERO,
+            };
+        }
+        // The first list (before the POST) misses; the one after the 409 finds it.
+        let n = listed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let rows = if n == 0 {
+            ""
+        } else {
+            r#"{"id":"raced","external_id":"E1"}"#
+        };
+        json(&format!(
+            r#"{{"results":[{rows}],"next_page_results":false,"next_cursor":""}}"#
+        ))
+    });
+    let mut req = new_issue("x");
+    req.external_id = Some("E1".into());
+    let (issue, created) = client(&fake).create_issue(&req).unwrap();
+    assert_eq!((issue.id.as_str(), created), ("raced", false));
+}
+
+#[test]
+fn update_patches_only_set_fields_and_maps_errors() {
+    let fake = Fake::start(|req| {
+        if req.path_and_query.contains("missing") {
+            Reply {
+                status: 404,
+                body: "{}".into(),
+                delay: Duration::ZERO,
+            }
+        } else {
+            json(&format!(r#"{{"id":"{UUID}","name":"renamed"}}"#))
+        }
+    });
+    let c = client(&fake);
+    let upd = UpdateIssue {
+        name: Some("renamed".into()),
+        estimate_point: Some(-4),
+        description_html: Some(String::new()),
+        ..UpdateIssue::default()
+    };
+    assert_eq!(c.update_issue(UUID, &upd).unwrap().name, "renamed");
+    let rec = &fake.recorded()[0];
+    assert_eq!(rec.method, "PATCH");
+    assert_eq!(
+        rec.path_and_query,
+        format!("/api/v1/workspaces/ws/projects/proj/issues/{UUID}/")
+    );
+    let b = body_of(&fake, "PATCH");
+    assert_eq!(
+        b,
+        serde_json::json!({"name": "renamed", "estimate_point": 0})
+    );
+
+    let gone = "aaaaaaaa-missing-aaaa-aaaa-aaaaaaaaaaaa";
+    assert!(matches!(
+        c.update_issue(gone, &upd),
+        Err(Error::TicketNotFound(_))
+    ));
+}
+
+#[test]
+fn comment_posts_the_go_html_and_maps_errors() {
+    let fake = Fake::start(|req| {
+        if req.path_and_query.contains("per_page=100") {
+            json(&format!(
+                r#"{{"results":[{}],"next_page_results":false,"next_cursor":""}}"#,
+                issue(UUID, 5, "s-todo", "[DEN-5] five")
+            ))
+        } else {
+            json("{}")
+        }
+    });
+    let c = client(&fake);
+    c.comment("DEN-5", "hello <b>x</b>").unwrap();
+    let post = fake
+        .recorded()
+        .into_iter()
+        .find(|r| r.method == "POST")
+        .unwrap();
+    assert_eq!(
+        post.path_and_query,
+        format!("/api/v1/workspaces/ws/projects/proj/issues/{UUID}/comments/")
+    );
+    assert_eq!(
+        body_of(&fake, "POST")["comment_html"],
+        "<p>hello <b>x</b></p>"
+    );
+    assert!(matches!(c.comment("DEN-5", "  "), Err(Error::Invalid(_))));
+    assert!(matches!(
+        c.comment("DEN-77", "hi"),
+        Err(Error::TicketNotFound(_))
+    ));
 }

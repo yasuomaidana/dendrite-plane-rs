@@ -16,4 +16,7 @@ pub use client::{
 };
 pub use error::{Error, Result};
 pub use resolve::resolve_issue;
-pub use types::{Issue, RelationRef, Relations, State, Status, status_for};
+pub use types::{
+    CreateIssue, Issue, LabelDetail, RelationRef, Relations, State, StateDetail, Status,
+    UpdateIssue, is_empty_context, status_for,
+};

@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-plane-rs/proto/cache.invalidate.json",
+  "title": "cache.invalidate",
+  "description": "Invalidates cached relations for specific issues or the entire project. Error kinds: config, unauthorized, http, not_found, invalid, transport, decode.",
+  "params": {
+    "type": "object",
+    "properties": {
+      "base_url": {
+        "type": "string",
+        "description": "Plane API base URL (optional, falls back to PLANE_BASE_URL)"
+      },
+      "workspace": {
+        "type": "string",
+        "description": "Plane workspace slug (optional, falls back to PLANE_WORKSPACE_SLUG)"
+      },
+      "project_id": {
+        "type": "string",
+        "description": "Plane project ID (optional, falls back to PLANE_PROJECT_ID)"
+      },
+      "issue_ids": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "default": [],
+        "description": "Issues whose relations changed; empty or absent clears the whole project cache"
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "ok"
+    ],
+    "properties": {
+      "ok": {
+        "type": "boolean",
+        "const": true
+      }
+    }
+  },
+  "$defs": {
+    "error_kind": {
+      "type": "string",
+      "enum": [
+        "config",
+        "unauthorized",
+        "http",
+        "not_found",
+        "invalid",
+        "transport",
+        "decode"
+      ]
+    }
+  }
+}

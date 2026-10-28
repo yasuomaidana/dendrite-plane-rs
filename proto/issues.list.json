@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-plane-rs/proto/issues.list.json",
+  "title": "issues.list",
+  "description": "Lists issues in the project. Error kinds: config, unauthorized, http, not_found, invalid, transport, decode.",
+  "params": {
+    "type": "object",
+    "properties": {
+      "base_url": {
+        "type": "string",
+        "description": "Plane API base URL (optional, falls back to PLANE_BASE_URL)"
+      },
+      "workspace": {
+        "type": "string",
+        "description": "Plane workspace slug (optional, falls back to PLANE_WORKSPACE_SLUG)"
+      },
+      "project_id": {
+        "type": "string",
+        "description": "Plane project ID (optional, falls back to PLANE_PROJECT_ID)"
+      },
+      "fields": {
+        "enum": [
+          "min",
+          "full"
+        ],
+        "default": "min",
+        "description": "min (scheduling fields only) or full (includes descriptions)"
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "issues"
+    ],
+    "properties": {
+      "issues": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/issue"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "issue": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "sequence_id",
+        "state"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "sequence_id": {
+          "type": "integer"
+        },
+        "state": {
+          "type": "string",
+          "description": "UUID of the workflow state"
+        },
+        "priority": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "estimate_point": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "start_date": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target_date": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updated_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "external_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description_html": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "external_source": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Present on single-issue reads and create/update replies"
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description_stripped": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state_detail": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "required": [
+            "name",
+            "group"
+          ],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "group": {
+              "type": "string"
+            }
+          }
+        },
+        "label_details": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "error_kind": {
+      "type": "string",
+      "enum": [
+        "config",
+        "unauthorized",
+        "http",
+        "not_found",
+        "invalid",
+        "transport",
+        "decode"
+      ]
+    }
+  }
+}

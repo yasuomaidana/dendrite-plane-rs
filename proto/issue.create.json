@@ -1,0 +1,228 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-plane-rs/proto/issue.create.json",
+  "title": "issue.create",
+  "description": "Protocol 1.1: Creates an issue. Result is {issue, created:boolean}; idempotent on external_id. Error kinds: config, unauthorized, http, not_found, invalid, transport, decode.",
+  "params": {
+    "type": "object",
+    "required": [
+      "name"
+    ],
+    "properties": {
+      "base_url": {
+        "type": "string",
+        "description": "Plane API base URL (optional, falls back to PLANE_BASE_URL)"
+      },
+      "workspace": {
+        "type": "string",
+        "description": "Plane workspace slug (optional, falls back to PLANE_WORKSPACE_SLUG)"
+      },
+      "project_id": {
+        "type": "string",
+        "description": "Plane project ID (optional, falls back to PLANE_PROJECT_ID)"
+      },
+      "name": {
+        "type": "string",
+        "description": "Issue title"
+      },
+      "description_html": {
+        "type": "string",
+        "default": "",
+        "description": "Issue description in HTML"
+      },
+      "state": {
+        "type": "string",
+        "description": "UUID of the workflow state"
+      },
+      "estimate_point": {
+        "type": "integer",
+        "description": "Estimate points"
+      },
+      "priority": {
+        "type": "string",
+        "description": "Priority (urgent, high, medium, low, none)"
+      },
+      "start_date": {
+        "type": "string",
+        "description": "Start date (YYYY-MM-DD)"
+      },
+      "target_date": {
+        "type": "string",
+        "description": "Due / target date (YYYY-MM-DD)"
+      },
+      "parent": {
+        "type": "string",
+        "description": "Parent issue UUID"
+      },
+      "external_id": {
+        "type": "string",
+        "description": "External ID for idempotency"
+      },
+      "external_source": {
+        "type": "string",
+        "description": "External source identifier"
+      },
+      "labels": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "default": [],
+        "description": "Label UUIDs"
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "issue",
+      "created"
+    ],
+    "properties": {
+      "issue": {
+        "$ref": "#/$defs/issue"
+      },
+      "created": {
+        "type": "boolean",
+        "description": "True if newly created; false if existing issue matched by external_id"
+      }
+    }
+  },
+  "$defs": {
+    "issue": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "sequence_id",
+        "state"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "sequence_id": {
+          "type": "integer"
+        },
+        "state": {
+          "type": "string",
+          "description": "UUID of the workflow state"
+        },
+        "priority": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "estimate_point": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "start_date": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target_date": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updated_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "external_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description_html": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "external_source": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Present on single-issue reads and create/update replies"
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description_stripped": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state_detail": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "required": [
+            "name",
+            "group"
+          ],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "group": {
+              "type": "string"
+            }
+          }
+        },
+        "label_details": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "error_kind": {
+      "type": "string",
+      "enum": [
+        "config",
+        "unauthorized",
+        "http",
+        "not_found",
+        "invalid",
+        "transport",
+        "decode"
+      ]
+    }
+  }
+}

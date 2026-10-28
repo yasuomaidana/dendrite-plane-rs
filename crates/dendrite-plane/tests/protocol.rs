@@ -81,3 +81,82 @@ fn a_project_is_required_somewhere() {
             .contains("project_id")
     );
 }
+
+#[test]
+fn the_protocol_is_1_1_0() {
+    assert_eq!(PROTOCOL, "1.1.0");
+}
+
+#[test]
+fn new_issue_methods_validate_params_and_report_invalid_without_calling_plane() {
+    let mut s = offline();
+    for method in ["issue.get", "issue.update", "issue.comment"] {
+        assert_eq!(
+            call(&mut s, method, json!({}))["error"]["code"],
+            -32602,
+            "{method}"
+        );
+    }
+    assert_eq!(
+        call(&mut s, "issue.create", json!({}))["error"]["code"],
+        -32602
+    );
+
+    // Rejected by the client's own checks, so nothing listens and nothing is asked.
+    let r = call(
+        &mut s,
+        "issue.create",
+        json!({"name": "n", "description_html": "<p></p>"}),
+    );
+    assert_eq!(r["error"]["code"], -32000);
+    assert_eq!(r["error"]["data"]["kind"], "invalid");
+    let r = call(
+        &mut s,
+        "issue.comment",
+        json!({"ref": "11111111-2222-3333-4444-555555555555", "comment": " "}),
+    );
+    assert_eq!(r["error"]["data"]["kind"], "invalid");
+}
+
+/// Every method the server answers has a schema in proto/, and no schema is orphaned.
+#[test]
+fn every_method_has_a_proto_schema() {
+    let methods = [
+        "health",
+        "board.snapshot",
+        "issues.list",
+        "states.list",
+        "issue.resolve",
+        "issue.get",
+        "issue.create",
+        "issue.update",
+        "issue.comment",
+        "issue.set_status",
+        "relations.batch",
+        "cache.invalidate",
+    ];
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../proto");
+    for m in methods {
+        let raw = std::fs::read_to_string(dir.join(format!("{m}.json")))
+            .unwrap_or_else(|_| panic!("proto/{m}.json is missing"));
+        let schema: Value = serde_json::from_str(&raw).unwrap_or_else(|e| panic!("{m}: {e}"));
+        assert!(
+            schema.get("params").is_some() && schema.get("result").is_some(),
+            "{m}"
+        );
+    }
+    let mut files: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| {
+            e.unwrap()
+                .file_name()
+                .to_string_lossy()
+                .trim_end_matches(".json")
+                .to_string()
+        })
+        .collect();
+    files.sort();
+    let mut want: Vec<String> = methods.iter().map(|m| m.to_string()).collect();
+    want.sort();
+    assert_eq!(files, want);
+}

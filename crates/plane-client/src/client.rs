@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::resolve::resolve_issue;
-use crate::types::{Issue, Relations, State, Status, status_for};
+use crate::types::{
+    CreateIssue, Issue, Relations, State, Status, UpdateIssue, is_empty_context, status_for,
+};
 
 /// Relation requests in flight at once. Plane answers each in about 35ms, so a serial sweep of a
 /// few hundred issues takes many seconds while sixteen workers finish in about one.
@@ -447,14 +449,181 @@ impl Client {
             .find(|s| status_for(&s.group, &s.name) == status)
             .ok_or_else(|| Error::StateNotFound(status.display_name().to_string()))?;
         let url = self.project_url(true, &format!("issues/{}/", issue.id));
-        let mut resp = self
-            .agent
-            .patch(&url)
+        let (status, _) = self.send("PATCH", &url, serde_json::json!({ "state": state.id }))?;
+        Self::check(status, "set ticket state")?;
+        Ok((issue, state))
+    }
+
+    /// POST or PATCH a JSON body and return Plane's status with the raw reply body, so callers can
+    /// map 404 and 409 themselves before [`Client::check`] turns the rest into errors.
+    fn send(&self, method: &str, url: &str, body: serde_json::Value) -> Result<(u16, String)> {
+        let req = match method {
+            "PATCH" => self.agent.patch(url),
+            _ => self.agent.post(url),
+        };
+        let mut resp = req
             .header("x-api-key", &self.cfg.api_key)
             .header("Accept", "application/json")
-            .send_json(serde_json::json!({ "state": state.id }))?;
-        Self::check(resp.status().as_u16(), "set ticket state")?;
-        let _ = resp.body_mut().read_to_string();
-        Ok((issue, state))
+            .send_json(body)?;
+        let status = resp.status().as_u16();
+        let text = resp.body_mut().read_to_string().unwrap_or_default();
+        Ok((status, text))
+    }
+
+    fn decode<T: DeserializeOwned>(text: &str) -> Result<T> {
+        serde_json::from_str(text).map_err(|e| Error::Decode(e.to_string()))
+    }
+
+    /// A UUID is used as is; anything else (`DEN-n`, a Plane number) is resolved against one issue
+    /// list, like [`Client::set_status`].
+    fn issue_id(&self, reference: &str) -> Result<String> {
+        let r = reference.trim();
+        if r.len() == 36 && r.matches('-').count() == 4 {
+            return Ok(r.to_string());
+        }
+        let issues = self.list_issues(ListFields::Min)?;
+        resolve_issue(&issues, r)
+            .map(|i| i.id.clone())
+            .ok_or_else(|| Error::TicketNotFound(reference.to_string()))
+    }
+
+    /// One issue with everything Plane returns for it (description, labels, state detail).
+    pub fn get_issue(&self, reference: &str) -> Result<Issue> {
+        let id = self.issue_id(reference)?;
+        let url = self.project_url(true, &format!("issues/{id}/"));
+        let mut resp = self
+            .agent
+            .get(&url)
+            .header("x-api-key", &self.cfg.api_key)
+            .header("Accept", "application/json")
+            .call()?;
+        let status = resp.status().as_u16();
+        if status == 404 {
+            return Err(Error::TicketNotFound(reference.to_string()));
+        }
+        Self::check(status, "get issue")?;
+        resp.body_mut()
+            .read_json()
+            .map_err(|e| Error::Decode(e.to_string()))
+    }
+
+    /// Creates an issue. With `external_id` set the call is idempotent: an issue already carrying
+    /// that id is returned with `created == false` and nothing is posted. Plane's 409 for a
+    /// duplicate external id is treated the same way. Module and blocker links are not made here.
+    pub fn create_issue(&self, req: &CreateIssue) -> Result<(Issue, bool)> {
+        if req.name.trim().is_empty() {
+            return Err(Error::Invalid("ticket name cannot be empty".into()));
+        }
+        if is_empty_context(&req.description_html) {
+            return Err(Error::Invalid(
+                "ticket context/description cannot be empty".into(),
+            ));
+        }
+        let external = req.external_id.as_deref().filter(|e| !e.is_empty());
+        if let Some(ext) = external
+            && let Some(found) = self.find_by_external_id(ext)?
+        {
+            return Ok((found, false));
+        }
+        let mut body = serde_json::Map::new();
+        body.insert("name".into(), req.name.clone().into());
+        body.insert(
+            "description_html".into(),
+            req.description_html.clone().into(),
+        );
+        put_text(&mut body, "state", &req.state);
+        put_text(&mut body, "priority", &req.priority);
+        put_estimate(&mut body, req.estimate_point);
+        put_dates(&mut body, &req.start_date, &req.target_date, &req.parent);
+        put_text(&mut body, "external_id", &req.external_id);
+        put_text(&mut body, "external_source", &req.external_source);
+        if !req.labels.is_empty() {
+            body.insert("labels".into(), req.labels.clone().into());
+        }
+        let url = self.project_url(true, "issues/");
+        let (status, text) = self.send("POST", &url, body.into())?;
+        if status == 409
+            && let Some(ext) = external
+            && let Some(found) = self.find_by_external_id(ext)?
+        {
+            return Ok((found, false));
+        }
+        Self::check(status, "create issue")?;
+        Ok((Self::decode(&text)?, true))
+    }
+
+    fn find_by_external_id(&self, external_id: &str) -> Result<Option<Issue>> {
+        Ok(self
+            .list_issues(ListFields::Min)?
+            .into_iter()
+            .find(|i| i.external_id.as_deref() == Some(external_id)))
+    }
+
+    /// Changes only the fields that are set (an empty string counts as unset, like the Go client).
+    pub fn update_issue(&self, reference: &str, req: &UpdateIssue) -> Result<Issue> {
+        let id = self.issue_id(reference)?;
+        let mut body = serde_json::Map::new();
+        put_text(&mut body, "name", &req.name);
+        put_text(&mut body, "description_html", &req.description_html);
+        put_text(&mut body, "state", &req.state);
+        put_text(&mut body, "priority", &req.priority);
+        put_estimate(&mut body, req.estimate_point);
+        put_dates(&mut body, &req.start_date, &req.target_date, &req.parent);
+        let url = self.project_url(true, &format!("issues/{id}/"));
+        let (status, text) = self.send("PATCH", &url, body.into())?;
+        if status == 404 {
+            return Err(Error::TicketNotFound(reference.to_string()));
+        }
+        Self::check(status, "update issue")?;
+        Self::decode(&text)
+    }
+
+    /// Adds a comment, wrapped in `<p>` exactly as the Go client does (the text is not escaped).
+    pub fn comment(&self, reference: &str, comment: &str) -> Result<()> {
+        if comment.trim().is_empty() {
+            return Err(Error::Invalid("comment cannot be empty".into()));
+        }
+        let id = self.issue_id(reference)?;
+        let url = self.project_url(true, &format!("issues/{id}/comments/"));
+        let (status, _) = self.send(
+            "POST",
+            &url,
+            serde_json::json!({ "comment_html": format!("<p>{comment}</p>") }),
+        )?;
+        if status == 404 {
+            return Err(Error::TicketNotFound(reference.to_string()));
+        }
+        Self::check(status, "add comment")
+    }
+}
+
+fn put_text(body: &mut serde_json::Map<String, serde_json::Value>, key: &str, v: &Option<String>) {
+    if let Some(s) = v.as_deref().filter(|s| !s.is_empty()) {
+        body.insert(key.into(), s.into());
+    }
+}
+
+/// Plane's estimate scale is 0..=12; out-of-range values are clamped, as in Go.
+fn put_estimate(body: &mut serde_json::Map<String, serde_json::Value>, v: Option<i64>) {
+    if let Some(n) = v {
+        body.insert("estimate_point".into(), n.clamp(0, 12).into());
+    }
+}
+
+/// Dates and parent are sent whenever set, even empty, so a caller can clear them like in Go.
+fn put_dates(
+    body: &mut serde_json::Map<String, serde_json::Value>,
+    start: &Option<String>,
+    target: &Option<String>,
+    parent: &Option<String>,
+) {
+    for (key, v) in [
+        ("start_date", start),
+        ("target_date", target),
+        ("parent", parent),
+    ] {
+        if let Some(s) = v {
+            body.insert(key.into(), s.clone().into());
+        }
     }
 }
