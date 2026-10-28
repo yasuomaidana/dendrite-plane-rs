@@ -1,7 +1,8 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -120,11 +121,34 @@ pub struct RelationsBatch {
     pub fetched: usize,
 }
 
+/// One cached relation set and when it was fetched (milliseconds since the Unix epoch, so the
+/// age survives across processes).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CacheEntry {
+    fetched_ms: u64,
+    relations: Relations,
+}
+
+#[derive(Default)]
+struct RelationCache {
+    entries: HashMap<String, CacheEntry>,
+    /// Modification time of the cache file when it was last read or written by this process.
+    seen_mtime: Option<SystemTime>,
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
+}
+
 pub struct Client {
     cfg: Config,
     agent: ureq::Agent,
     relations_ttl: Duration,
-    cache: Mutex<HashMap<String, (Instant, Relations)>>,
+    cache: Mutex<RelationCache>,
+    /// Where the cache is shared between processes (short-lived CLI runs each start a sidecar).
+    cache_file: Option<PathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -155,7 +179,8 @@ impl Client {
             cfg,
             agent,
             relations_ttl: DEFAULT_RELATIONS_TTL,
-            cache: Mutex::new(HashMap::new()),
+            cache: Mutex::new(RelationCache::default()),
+            cache_file: None,
         }
     }
 
@@ -165,20 +190,70 @@ impl Client {
         self
     }
 
+    /// Shares the relation cache between processes through a file. The file is read when another
+    /// process changed it and rewritten atomically after every change here.
+    pub fn with_cache_file(mut self, path: PathBuf) -> Client {
+        self.cache_file = Some(path);
+        self
+    }
+
     /// Forgets cached relations for these issues; call it after changing their relations.
     pub fn invalidate_relations(&self, issue_ids: &[String]) {
         let mut cache = self.cache.lock().unwrap();
+        self.reload_if_changed(&mut cache);
         for id in issue_ids {
-            cache.remove(id);
+            cache.entries.remove(id);
         }
+        self.save(&mut cache);
     }
 
     pub fn clear_relations_cache(&self) {
-        self.cache.lock().unwrap().clear();
+        let mut cache = self.cache.lock().unwrap();
+        cache.entries.clear();
+        self.save(&mut cache);
     }
 
-    pub fn config(&self) -> &Config {
-        &self.cfg
+    fn file_mtime(&self) -> Option<SystemTime> {
+        std::fs::metadata(self.cache_file.as_ref()?)
+            .and_then(|m| m.modified())
+            .ok()
+    }
+
+    /// Replaces the in-memory entries with the file's when another process rewrote it.
+    fn reload_if_changed(&self, cache: &mut RelationCache) {
+        let Some(path) = &self.cache_file else { return };
+        let mtime = self.file_mtime();
+        if mtime.is_none() || mtime == cache.seen_mtime {
+            return;
+        }
+        if let Ok(bytes) = std::fs::read(path)
+            && let Ok(entries) = serde_json::from_slice::<HashMap<String, CacheEntry>>(&bytes)
+        {
+            cache.entries = entries;
+        }
+        cache.seen_mtime = mtime;
+    }
+
+    /// Writes the cache atomically (temporary file, then rename). Failures only cost sharing.
+    fn save(&self, cache: &mut RelationCache) {
+        let Some(path) = &self.cache_file else { return };
+        let ttl_ms = (self.relations_ttl.as_millis() as u64).max(1);
+        let now = now_ms();
+        cache
+            .entries
+            .retain(|_, e| now.saturating_sub(e.fetched_ms) < ttl_ms);
+        let Ok(bytes) = serde_json::to_vec(&cache.entries) else {
+            return;
+        };
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let tmp = path.with_extension(format!("tmp{}", std::process::id()));
+        if std::fs::write(&tmp, bytes).is_ok() && std::fs::rename(&tmp, path).is_ok() {
+            cache.seen_mtime = self.file_mtime();
+        } else {
+            let _ = std::fs::remove_file(&tmp);
+        }
     }
 
     fn project_url(&self, public_api: bool, tail: &str) -> String {
@@ -266,11 +341,13 @@ impl Client {
         let mut out = RelationsBatch::default();
         let mut missing: Vec<String> = Vec::new();
         {
-            let cache = self.cache.lock().unwrap();
+            let mut cache = self.cache.lock().unwrap();
+            self.reload_if_changed(&mut cache);
+            let (now, ttl_ms) = (now_ms(), self.relations_ttl.as_millis() as u64);
             for id in issue_ids {
-                match cache.get(id) {
-                    Some((at, rel)) if !fresh && at.elapsed() < self.relations_ttl => {
-                        out.relations.insert(id.clone(), rel.clone());
+                match cache.entries.get(id) {
+                    Some(e) if !fresh && now.saturating_sub(e.fetched_ms) < ttl_ms => {
+                        out.relations.insert(id.clone(), e.relations.clone());
                         out.cached += 1;
                     }
                     _ => missing.push(id.clone()),
@@ -304,11 +381,20 @@ impl Client {
         let fetched = ok.into_inner().unwrap();
         out.fetched = fetched.len();
         {
-            let now = Instant::now();
+            let now = now_ms();
             let mut cache = self.cache.lock().unwrap();
+            // Another process may have cached other issues meanwhile; keep them.
+            self.reload_if_changed(&mut cache);
             for (id, rel) in &fetched {
-                cache.insert(id.clone(), (now, rel.clone()));
+                cache.entries.insert(
+                    id.clone(),
+                    CacheEntry {
+                        fetched_ms: now,
+                        relations: rel.clone(),
+                    },
+                );
             }
+            self.save(&mut cache);
         }
         out.relations.extend(fetched);
         out.failed = failed.into_inner().unwrap();

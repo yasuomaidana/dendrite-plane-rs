@@ -316,3 +316,60 @@ fn list_issues_drops_rows_plane_repeats_for_each_module_an_issue_belongs_to() {
         .collect();
     assert_eq!(ids, ["a", "c", "b"], "first occurrence wins, order is kept");
 }
+
+#[test]
+fn a_cache_file_is_shared_between_clients_like_two_cli_runs() {
+    let fake = Fake::start(|req| {
+        let p = &req.path_and_query;
+        if p.contains("/issue-relation/") {
+            json(r#"{"blocked_by":[]}"#)
+        } else if p.contains("/states/") {
+            json(STATES)
+        } else {
+            json(&format!(
+                r#"{{"results":[{}],"next_page_results":false}}"#,
+                issue("a", 1, "s-todo", "[DEN-1] one")
+            ))
+        }
+    });
+    let dir = std::env::temp_dir().join(format!("plane-cache-test-{}", std::process::id()));
+    let file = dir.join("rel.json");
+    let _ = std::fs::remove_dir_all(&dir);
+    let relation_calls = |f: &Fake| {
+        f.recorded()
+            .iter()
+            .filter(|r| r.path_and_query.contains("/issue-relation/"))
+            .count()
+    };
+
+    let first = client(&fake).with_cache_file(file.clone());
+    assert_eq!(first.snapshot(false).unwrap().relations_fetched, 1);
+    assert!(file.exists(), "the cache was not written");
+
+    // A second process starts cold in memory but finds the file.
+    let second = client(&fake).with_cache_file(file.clone());
+    let warm = second.snapshot(false).unwrap();
+    assert_eq!(
+        (
+            warm.relations_fetched,
+            warm.relations_cached,
+            relation_calls(&fake)
+        ),
+        (0, 1, 1)
+    );
+
+    // One process invalidates; the other sees it without being told.
+    second.invalidate_relations(&["a".to_string()]);
+    let after = first.snapshot(false).unwrap();
+    assert_eq!(
+        (after.relations_fetched, relation_calls(&fake)),
+        (1, 2),
+        "the first client served a relation set the second one invalidated"
+    );
+
+    // An unreadable file only costs sharing.
+    std::fs::write(&file, b"not json").unwrap();
+    let third = client(&fake).with_cache_file(file);
+    assert_eq!(third.snapshot(false).unwrap().relations_fetched, 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}

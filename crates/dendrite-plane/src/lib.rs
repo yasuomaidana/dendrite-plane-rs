@@ -9,7 +9,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 /// Protocol version. Clients must reject a server whose major version differs from theirs.
-pub const PROTOCOL: &str = "0.1.0";
+pub const PROTOCOL: &str = "1.0.0";
 
 const PARSE_ERROR: i64 = -32700;
 const INVALID_REQUEST: i64 = -32600;
@@ -115,6 +115,7 @@ struct InvalidateParams {
 pub struct Server {
     base: std::result::Result<Config, Error>,
     relations_ttl: std::time::Duration,
+    cache_dir: Option<std::path::PathBuf>,
     clients: HashMap<(String, String, String), Client>,
 }
 
@@ -129,9 +130,13 @@ impl Server {
                 plane_client::DEFAULT_RELATIONS_TTL,
                 std::time::Duration::from_secs,
             );
+        let cache_dir = std::env::var_os("DENDRITE_PLANE_CACHE_DIR")
+            .filter(|v| !v.is_empty())
+            .map(std::path::PathBuf::from);
         Server {
             base: Config::from_env(),
             relations_ttl: ttl,
+            cache_dir,
             clients: HashMap::new(),
         }
     }
@@ -140,6 +145,7 @@ impl Server {
         Server {
             base: Ok(cfg),
             relations_ttl: plane_client::DEFAULT_RELATIONS_TTL,
+            cache_dir: None,
             clients: HashMap::new(),
         }
     }
@@ -170,10 +176,17 @@ impl Server {
             cfg.project_id.clone(),
         );
         let ttl = self.relations_ttl;
-        Ok(self
-            .clients
-            .entry(key)
-            .or_insert_with(|| Client::new(cfg).with_relations_ttl(ttl)))
+        let cache_file = self
+            .cache_dir
+            .as_ref()
+            .map(|d| d.join(format!("plane-relations-{:016x}.json", fnv1a(&key))));
+        Ok(self.clients.entry(key).or_insert_with(|| {
+            let client = Client::new(cfg).with_relations_ttl(ttl);
+            match cache_file {
+                Some(path) => client.with_cache_file(path),
+                None => client,
+            }
+        }))
     }
 
     /// Handles one line. Returns `None` for notifications (requests without an `id`).
@@ -294,4 +307,16 @@ fn error_response(id: Value, e: &RpcError) -> String {
         err["data"] = json!({"kind": kind});
     }
     json!({"jsonrpc": "2.0", "id": id, "error": err}).to_string()
+}
+
+/// FNV-1a, enough to name a per-project cache file without pulling in a hashing crate.
+fn fnv1a(key: &(String, String, String)) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for part in [&key.0, &key.1, &key.2] {
+        for byte in part.bytes().chain(std::iter::once(0)) {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    }
+    hash
 }

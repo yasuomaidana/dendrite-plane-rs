@@ -27,8 +27,9 @@ The token is never defaulted and never sent over the protocol.
 | `PLANE_WORKSPACE_SLUG` | Default `dendrite-ws`. |
 | `PLANE_PROJECT_ID` | Default project; every call may override it with `project_id`. |
 | `DENDRITE_PLANE_RELATIONS_TTL_SECS` | Relations cache lifetime, default 60. |
+| `DENDRITE_PLANE_CACHE_DIR` | When set, the relations cache is also kept in a file there, shared by every process (short-lived CLI runs each start their own sidecar). |
 
-## Protocol 0.1.0
+## Protocol 1.0.0
 
 Every method that touches Plane accepts the optional `base_url`, `workspace` and `project_id`. Errors use JSON-RPC codes `-32700`, `-32600`, `-32601`, `-32602`; engine failures are `-32000` with `data.kind` one of `config`, `unauthorized`, `http`, `not_found`, `transport`, `decode`.
 
