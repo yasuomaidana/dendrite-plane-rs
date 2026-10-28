@@ -1,0 +1,6 @@
+{
+  "identifier": "DPLANE",
+  "project_id": "27eaa112-f023-4c22-9065-a90bb0b920df",
+  "name": "dendrite-plane-rs",
+  "workspace": "dendrite-ws"
+}
