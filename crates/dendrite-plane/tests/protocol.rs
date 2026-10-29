@@ -86,14 +86,21 @@ fn a_project_is_required_somewhere() {
 }
 
 #[test]
-fn the_protocol_is_1_2_0() {
-    assert_eq!(PROTOCOL, "1.2.0");
+fn the_protocol_is_1_3_0() {
+    assert_eq!(PROTOCOL, "1.3.0");
 }
 
 #[test]
 fn new_issue_methods_validate_params_and_report_invalid_without_calling_plane() {
     let mut s = offline();
-    for method in ["issue.get", "issue.update", "issue.comment"] {
+    for method in [
+        "issue.get",
+        "issue.update",
+        "issue.comment",
+        "issue.comment_update",
+        "issue.comments",
+        "issue.labels_patch",
+    ] {
         assert_eq!(
             call(&mut s, method, json!({}))["error"]["code"],
             -32602,
@@ -119,6 +126,17 @@ fn new_issue_methods_validate_params_and_report_invalid_without_calling_plane() 
         json!({"ref": "11111111-2222-3333-4444-555555555555", "comment": " "}),
     );
     assert_eq!(r["error"]["data"]["kind"], "invalid");
+    let r = call(
+        &mut s,
+        "issue.comment_update",
+        json!({
+            "ref": "11111111-2222-3333-4444-555555555555",
+            "comment_id": "c-1",
+            "comment_html": "  "
+        }),
+    );
+    assert_eq!(r["error"]["code"], -32000);
+    assert_eq!(r["error"]["data"]["kind"], "invalid");
 }
 
 /// Every method the server answers has a schema in proto/, and no schema is orphaned.
@@ -134,11 +152,15 @@ fn every_method_has_a_proto_schema() {
         "issue.create",
         "issue.update",
         "issue.comment",
+        "issue.comment_update",
+        "issue.comments",
+        "issue.labels_patch",
         "issue.set_status",
         "relations.batch",
         "cache.invalidate",
         "project.archive",
         "project.delete",
+        "user.me",
     ];
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../proto");
     for m in methods {
@@ -221,6 +243,211 @@ fn project_archive_and_delete_return_ok_and_map_unknown_project() {
 
     // The health result reports the new protocol version
     let r = call(&mut server, "health", json!({}));
-    assert_eq!(r["result"]["protocol"], "1.2.0");
+    assert_eq!(r["result"]["protocol"], "1.3.0");
     assert_eq!(r["result"]["protocol"], PROTOCOL);
+}
+
+#[test]
+fn user_me_protocol_method_returns_user() {
+    let state = fake_plane::FakeState::default();
+    let (fake, _) = fake_plane::Fake::with_routes(state);
+    let mut server = Server::with_config(Config::new(&fake.url, "ws", "proj", "k").unwrap());
+
+    let r = call(&mut server, "user.me", json!({}));
+    assert_eq!(r["result"]["user"]["id"], "usr-1");
+    assert_eq!(r["result"]["user"]["email"], "agent@example.com");
+    assert_eq!(r["result"]["user"]["display_name"], "Agent Dendrite");
+}
+
+#[test]
+fn issue_comments_and_comment_update_protocol_methods() {
+    let uuid = "11111111-2222-3333-4444-555555555555";
+    let mut state = fake_plane::FakeState::default();
+    state.issues.insert(
+        uuid.to_string(),
+        json!({
+            "id": uuid,
+            "name": "[DEN-1] test ticket",
+            "sequence_id": 1,
+            "state": "s-todo"
+        }),
+    );
+    state.comments.insert(
+        uuid.to_string(),
+        vec![
+            json!({
+                "id": "c-1",
+                "comment_html": "<p>first</p>",
+                "created_at": "2026-10-28T12:00:00Z",
+                "updated_at": "2026-10-28T12:00:00Z"
+            }),
+            json!({
+                "id": "c-2",
+                "comment_html": "<p>second</p>",
+                "created_at": "2026-10-28T12:05:00Z",
+                "updated_at": "2026-10-28T12:05:00Z"
+            }),
+        ],
+    );
+    let (fake, _) = fake_plane::Fake::with_routes(state);
+    let mut server = Server::with_config(Config::new(&fake.url, "ws", "proj", "k").unwrap());
+
+    // issue.comments
+    let r = call(&mut server, "issue.comments", json!({"ref": uuid}));
+    let comments = r["result"]["comments"].as_array().unwrap();
+    assert_eq!(comments.len(), 2);
+    assert_eq!(comments[0]["id"], "c-1");
+    assert_eq!(comments[0]["comment_html"], "<p>first</p>");
+    assert_eq!(comments[0]["created_at"], "2026-10-28T12:00:00Z");
+    assert_eq!(comments[0]["updated_at"], "2026-10-28T12:00:00Z");
+    assert_eq!(comments[1]["id"], "c-2");
+
+    // issue.comment_update
+    let r = call(
+        &mut server,
+        "issue.comment_update",
+        json!({
+            "ref": uuid,
+            "comment_id": "c-1",
+            "comment_html": "updated body"
+        }),
+    );
+    assert_eq!(r["result"]["ok"], true);
+
+    // Unknown comment id -> not_found
+    let r = call(
+        &mut server,
+        "issue.comment_update",
+        json!({
+            "ref": uuid,
+            "comment_id": "unknown-cid",
+            "comment_html": "updated body"
+        }),
+    );
+    assert_eq!(r["error"]["code"], -32000);
+    assert_eq!(r["error"]["data"]["kind"], "not_found");
+
+    // Unknown ticket -> not_found
+    let r = call(
+        &mut server,
+        "issue.comments",
+        json!({"ref": "22222222-2222-2222-2222-222222222222"}),
+    );
+    assert_eq!(r["error"]["code"], -32000);
+    assert_eq!(r["error"]["data"]["kind"], "not_found");
+}
+
+#[test]
+fn issue_update_with_assignees_and_label_resolution() {
+    let uuid = "11111111-2222-3333-4444-555555555555";
+    let label_uuid = "33333333-3333-3333-3333-333333333333";
+    let mut state = fake_plane::FakeState::default();
+    state.issues.insert(
+        uuid.to_string(),
+        json!({
+            "id": uuid,
+            "name": "[DEN-1] test ticket",
+            "sequence_id": 1,
+            "state": "s-todo"
+        }),
+    );
+    state.labels.push(json!({
+        "id": label_uuid,
+        "name": "existing-label",
+        "color": "#123456"
+    }));
+    let (fake, _) = fake_plane::Fake::with_routes(state);
+    let mut server = Server::with_config(Config::new(&fake.url, "ws", "proj", "k").unwrap());
+
+    // issue.update with assignees and labels (one UUID, one name resolved via ensure_label)
+    let r = call(
+        &mut server,
+        "issue.update",
+        json!({
+            "ref": uuid,
+            "assignees": ["usr-uuid-1"],
+            "labels": [label_uuid, "new-label-name"]
+        }),
+    );
+    assert_eq!(r["result"]["issue"]["id"], uuid);
+    let rec = fake.recorded();
+    let patch = rec
+        .iter()
+        .find(|r| r.method == "PATCH" && r.path_and_query.contains(&format!("/issues/{uuid}/")))
+        .unwrap();
+    let b: Value = serde_json::from_str(&patch.body).unwrap();
+    assert_eq!(b["assignees"], json!(["usr-uuid-1"]));
+    let labels_sent = b["labels"].as_array().unwrap();
+    assert_eq!(labels_sent.len(), 2);
+    assert_eq!(labels_sent[0], label_uuid);
+    assert!(labels_sent[1].as_str().unwrap().starts_with("lbl-"));
+}
+
+#[test]
+fn issue_labels_patch_protocol_method() {
+    let uuid = "11111111-2222-3333-4444-555555555555";
+    let mut state = fake_plane::FakeState::default();
+    state.labels.push(json!({
+        "id": "lbl-1",
+        "name": "bug",
+        "color": "#ff0000"
+    }));
+    state.labels.push(json!({
+        "id": "lbl-2",
+        "name": "agent:old",
+        "color": "#7C3AED"
+    }));
+    state.issues.insert(
+        uuid.to_string(),
+        json!({
+            "id": uuid,
+            "name": "[DEN-1] test ticket",
+            "sequence_id": 1,
+            "state": "s-todo",
+            "labels": ["lbl-1", "lbl-2"],
+            "label_details": [
+                {"id": "lbl-1", "name": "bug"},
+                {"id": "lbl-2", "name": "agent:old"}
+            ]
+        }),
+    );
+    let (fake, _) = fake_plane::Fake::with_routes(state);
+    let mut server = Server::with_config(Config::new(&fake.url, "ws", "proj", "k").unwrap());
+
+    let r = call(
+        &mut server,
+        "issue.labels_patch",
+        json!({
+            "ref": uuid,
+            "add": ["agent:new"],
+            "remove_prefixes": ["agent:"]
+        }),
+    );
+    assert_eq!(r["result"]["issue"]["id"], uuid);
+    assert_eq!(r["result"]["labels"], json!(["bug", "agent:new"]));
+
+    // Second call without duplicates
+    let r = call(
+        &mut server,
+        "issue.labels_patch",
+        json!({
+            "ref": uuid,
+            "add": ["agent:new"],
+            "remove_prefixes": ["agent:"]
+        }),
+    );
+    assert_eq!(r["result"]["labels"], json!(["bug", "agent:new"]));
+
+    // Missing ticket -> not_found
+    let r = call(
+        &mut server,
+        "issue.labels_patch",
+        json!({
+            "ref": "missing-ref",
+            "add": ["x"],
+            "remove_prefixes": []
+        }),
+    );
+    assert_eq!(r["error"]["code"], -32000);
+    assert_eq!(r["error"]["data"]["kind"], "not_found");
 }

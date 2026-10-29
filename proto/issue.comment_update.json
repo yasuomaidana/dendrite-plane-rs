@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-plane-rs/proto/issue.comment_update.json",
+  "title": "issue.comment_update",
+  "description": "Protocol 1.3: Updates an existing comment on an issue. Error kinds: config, unauthorized, http, not_found, invalid, transport, decode.",
+  "params": {
+    "type": "object",
+    "required": [
+      "ref",
+      "comment_id",
+      "comment_html"
+    ],
+    "properties": {
+      "base_url": {
+        "type": "string",
+        "description": "Plane API base URL (optional, falls back to PLANE_BASE_URL)"
+      },
+      "workspace": {
+        "type": "string",
+        "description": "Plane workspace slug (optional, falls back to PLANE_WORKSPACE_SLUG)"
+      },
+      "project_id": {
+        "type": "string",
+        "description": "Plane project ID (optional, falls back to PLANE_PROJECT_ID)"
+      },
+      "ref": {
+        "type": "string",
+        "description": "DEN-n, the Plane number, or the issue UUID"
+      },
+      "comment_id": {
+        "type": "string",
+        "description": "Comment UUID"
+      },
+      "comment_html": {
+        "type": "string",
+        "description": "Updated comment HTML body"
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "ok"
+    ],
+    "properties": {
+      "ok": {
+        "type": "boolean",
+        "const": true
+      }
+    }
+  },
+  "$defs": {
+    "error_kind": {
+      "type": "string",
+      "enum": [
+        "config",
+        "unauthorized",
+        "http",
+        "not_found",
+        "invalid",
+        "transport",
+        "decode"
+      ]
+    }
+  }
+}

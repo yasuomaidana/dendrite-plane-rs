@@ -714,3 +714,242 @@ fn delete_project_sends_delete_and_maps_errors() {
     assert_eq!(err.kind(), "unauthorized");
     assert!(matches!(err, Error::Unauthorized(401)));
 }
+
+#[test]
+fn ensure_label_creating_and_reusing() {
+    let mut state = fake_plane::FakeState::default();
+    state.labels.push(serde_json::json!({
+        "id": "lbl-existing",
+        "name": "bug",
+        "color": "#FF0000"
+    }));
+    let (fake, _fake_state) = Fake::with_routes(state);
+    let c = client(&fake);
+
+    // Reusing existing label
+    let reused = c.ensure_label("bug", "#00FF00").unwrap();
+    assert_eq!(reused.id, "lbl-existing");
+    assert_eq!(reused.name, "bug");
+    assert_eq!(reused.color, "#FF0000");
+
+    // Creating a new label
+    let created = c.ensure_label("feature", "#0000FF").unwrap();
+    assert_eq!(created.name, "feature");
+    assert_eq!(created.color, "#0000FF");
+
+    // Verify it is now in state and can be reused
+    let reused_new = c.ensure_label("feature", "#0000FF").unwrap();
+    assert_eq!(reused_new.id, created.id);
+
+    // Empty input fails
+    assert!(matches!(
+        c.ensure_label("  ", "#fff"),
+        Err(Error::Invalid(_))
+    ));
+}
+
+#[test]
+fn patch_labels_replaces_agent_and_tier_on_second_call_without_duplicates() {
+    let mut state = fake_plane::FakeState::default();
+    state.labels.push(serde_json::json!({
+        "id": "lbl-bug",
+        "name": "bug",
+        "color": "#ff0000"
+    }));
+    state.labels.push(serde_json::json!({
+        "id": "lbl-agent-old",
+        "name": "agent:coder",
+        "color": "#7C3AED"
+    }));
+    state.labels.push(serde_json::json!({
+        "id": "lbl-tier-old",
+        "name": "tier:1",
+        "color": "#7C3AED"
+    }));
+
+    let issue_val = serde_json::json!({
+        "id": UUID,
+        "name": "[DEN-1] test ticket",
+        "sequence_id": 1,
+        "state": "s-todo",
+        "labels": ["lbl-bug", "lbl-agent-old", "lbl-tier-old"],
+        "label_details": [
+            {"id": "lbl-bug", "name": "bug"},
+            {"id": "lbl-agent-old", "name": "agent:coder"},
+            {"id": "lbl-tier-old", "name": "tier:1"}
+        ]
+    });
+    state.issues.insert(UUID.to_string(), issue_val);
+
+    let (fake, _fake_state) = Fake::with_routes(state);
+    let c = client(&fake);
+
+    let add = vec!["agent:planner".to_string(), "tier:2".to_string()];
+    let remove_prefixes = vec!["agent:".to_string(), "tier:".to_string()];
+
+    // First call: replaces agent:coder with agent:planner, tier:1 with tier:2, keeps bug
+    let (_iss1, labels1) = c.patch_labels(UUID, &add, &remove_prefixes).unwrap();
+    assert_eq!(labels1, vec!["bug", "agent:planner", "tier:2"]);
+
+    // Second call with same arguments: must produce exact same label list with NO duplicates!
+    let (_iss2, labels2) = c.patch_labels(UUID, &add, &remove_prefixes).unwrap();
+    assert_eq!(labels2, vec!["bug", "agent:planner", "tier:2"]);
+
+    // Unknown ticket fails
+    let err = c
+        .patch_labels("missing-uuid", &add, &remove_prefixes)
+        .unwrap_err();
+    assert_eq!(err.kind(), "not_found");
+
+    // Empty input fails
+    let err = c.patch_labels("   ", &add, &remove_prefixes).unwrap_err();
+    assert_eq!(err.kind(), "invalid");
+}
+
+#[test]
+fn me_returns_user_and_handles_auth_error() {
+    let state = fake_plane::FakeState::default();
+    let (fake, _) = Fake::with_routes(state);
+    let c = client(&fake);
+    let user = c.me().unwrap();
+    assert_eq!(user.id, "usr-1");
+    assert_eq!(user.email, "agent@example.com");
+    assert_eq!(user.display_name, "Agent Dendrite");
+
+    let denied = Client::new(Config::new(&fake.url, "ws", "p", "wrong-key").unwrap());
+    let err = denied.me().unwrap_err();
+    assert_eq!(err.kind(), "unauthorized");
+}
+
+#[test]
+fn list_comments_returns_oldest_first_and_maps_unknown_ticket() {
+    let mut state = fake_plane::FakeState::default();
+    state.issues.insert(
+        UUID.to_string(),
+        serde_json::json!({
+            "id": UUID,
+            "name": "[DEN-1] test ticket",
+            "sequence_id": 1,
+            "state": "s-todo"
+        }),
+    );
+    state.comments.insert(
+        UUID.to_string(),
+        vec![
+            serde_json::json!({
+                "id": "c-2",
+                "comment_html": "<p>second</p>",
+                "created_at": "2026-10-28T12:02:00Z",
+                "updated_at": "2026-10-28T12:02:00Z"
+            }),
+            serde_json::json!({
+                "id": "c-1",
+                "comment_html": "<p>first</p>",
+                "created_at": "2026-10-28T12:01:00Z",
+                "updated_at": "2026-10-28T12:01:00Z"
+            }),
+        ],
+    );
+
+    let (fake, _) = Fake::with_routes(state);
+    let c = client(&fake);
+    let comments = c.list_comments(UUID).unwrap();
+    assert_eq!(comments.len(), 2);
+    // Oldest first: c-1 then c-2
+    assert_eq!(comments[0].id, "c-1");
+    assert_eq!(comments[1].id, "c-2");
+
+    // Unknown ticket
+    let err = c.list_comments("unknown-uuid").unwrap_err();
+    assert_eq!(err.kind(), "not_found");
+
+    // Empty input
+    let err = c.list_comments("   ").unwrap_err();
+    assert_eq!(err.kind(), "invalid");
+}
+
+#[test]
+fn update_comment_patches_as_is_and_maps_unknown_comment_or_ticket() {
+    let mut state = fake_plane::FakeState::default();
+    state.issues.insert(
+        UUID.to_string(),
+        serde_json::json!({
+            "id": UUID,
+            "name": "[DEN-1] test ticket",
+            "sequence_id": 1,
+            "state": "s-todo"
+        }),
+    );
+    state.comments.insert(
+        UUID.to_string(),
+        vec![serde_json::json!({
+            "id": "c-1",
+            "comment_html": "original",
+            "created_at": "2026-10-28T12:00:00Z",
+            "updated_at": "2026-10-28T12:00:00Z"
+        })],
+    );
+
+    let (fake, _) = Fake::with_routes(state);
+    let c = client(&fake);
+
+    // Update comment with raw html (sent as-is without <p> wrapping)
+    c.update_comment(UUID, "c-1", "plain text without tags")
+        .unwrap();
+
+    let reqs = fake.recorded();
+    let patch_req = reqs
+        .iter()
+        .find(|r| r.method == "PATCH" && r.path_and_query.contains("/comments/c-1/"))
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&patch_req.body).unwrap()["comment_html"],
+        "plain text without tags"
+    );
+
+    // Unknown comment id on existing ticket
+    let err = c.update_comment(UUID, "c-999", "new").unwrap_err();
+    assert_eq!(err.kind(), "not_found");
+    assert!(matches!(err, Error::CommentNotFound(_)));
+
+    // Unknown ticket
+    let err = c
+        .update_comment("missing-ticket", "c-1", "new")
+        .unwrap_err();
+    assert_eq!(err.kind(), "not_found");
+    assert!(matches!(err, Error::TicketNotFound(_)));
+
+    // Empty input checks
+    assert!(matches!(
+        c.update_comment("  ", "c-1", "x"),
+        Err(Error::Invalid(_))
+    ));
+    assert!(matches!(
+        c.update_comment(UUID, "  ", "x"),
+        Err(Error::Invalid(_))
+    ));
+    assert!(matches!(
+        c.update_comment(UUID, "c-1", "  "),
+        Err(Error::Invalid(_))
+    ));
+}
+
+#[test]
+fn update_issue_replaces_assignees_and_labels_and_preserves_unset() {
+    let fake = Fake::start(|_| json(&format!(r#"{{"id":"{UUID}","name":"ok"}}"#)));
+    let c = client(&fake);
+
+    let upd = UpdateIssue {
+        name: Some("test".into()),
+        assignees: Some(vec!["u-1".into(), "u-2".into()]),
+        labels: Some(vec![]), // empty replacement list
+        ..UpdateIssue::default()
+    };
+    c.update_issue(UUID, &upd).unwrap();
+
+    let b = body_of(&fake, "PATCH");
+    assert_eq!(b["name"], "test");
+    assert_eq!(b["assignees"], serde_json::json!(["u-1", "u-2"]));
+    assert_eq!(b["labels"], serde_json::json!([]));
+    assert!(b.get("description_html").is_none());
+}

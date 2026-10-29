@@ -38,7 +38,42 @@ pub struct Issue {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state_detail: Option<StateDetail>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assignees: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub label_details: Vec<LabelDetail>,
+}
+
+/// A project label.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Label {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub color: String,
+}
+
+/// The current authenticated user.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct User {
+    pub id: String,
+    #[serde(default)]
+    pub email: String,
+    #[serde(default)]
+    pub display_name: String,
+}
+
+/// An issue comment.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Comment {
+    pub id: String,
+    #[serde(default)]
+    pub comment_html: String,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub updated_at: String,
 }
 
 /// The state Plane embeds in a single-issue read.
@@ -53,7 +88,11 @@ pub struct StateDetail {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct LabelDetail {
     #[serde(default)]
+    pub id: String,
+    #[serde(default)]
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
 }
 
 /// Fields for a new issue, as Go's `plane.CreateIssueRequest` minus module and blocker links
@@ -102,6 +141,10 @@ pub struct UpdateIssue {
     pub target_date: Option<String>,
     #[serde(default)]
     pub parent: Option<String>,
+    #[serde(default)]
+    pub assignees: Option<Vec<String>>,
+    #[serde(default)]
+    pub labels: Option<Vec<String>>,
 }
 
 /// Go's `plane.IsEmptyContext`: true when a description has no text once tags (`<...>`) and

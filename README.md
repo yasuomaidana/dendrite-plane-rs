@@ -29,7 +29,7 @@ The token is never defaulted and never sent over the protocol.
 | `DENDRITE_PLANE_RELATIONS_TTL_SECS` | Relations cache lifetime, default 60. |
 | `DENDRITE_PLANE_CACHE_DIR` | When set, the relations cache is also kept in a file there, shared by every process (short-lived CLI runs each start their own sidecar). |
 
-## Protocol 1.1.0
+## Protocol 1.3.0
 
 Every method that touches Plane accepts the optional `base_url`, `workspace` and `project_id`. Errors use JSON-RPC codes `-32700`, `-32600`, `-32601`, `-32602`; engine failures are `-32000` with `data.kind` one of `config`, `unauthorized`, `http`, `not_found`, `invalid`, `transport`, `decode`. Each method has a JSON Schema in [`proto/`](proto/), checked by a test.
 
@@ -42,11 +42,17 @@ Every method that touches Plane accepts the optional `base_url`, `workspace` and
 | `issue.resolve` | `{ref}` | `{issue}`; `ref` is `DEN-n`, the Plane number or the UUID, never matched by substring |
 | `issue.get` | `{ref}` | `{issue}` with description, labels and state detail; a UUID is read directly, `DEN-n` or a Plane number is resolved through one list (1.1) |
 | `issue.create` | `{name, description_html, state?, estimate_point?, priority?, start_date?, target_date?, parent?, external_id?, external_source?, labels?}` | `{issue, created}`; with `external_id` set it is idempotent: an issue already carrying it is returned with `created: false` and nothing is posted (a 409 counts too). Estimates clamp to 0..12; an empty name or description is `invalid` (1.1) |
-| `issue.update` | `{ref, name?, description_html?, state?, estimate_point?, priority?, start_date?, target_date?, parent?}` | `{issue}`; only set fields are sent, empty strings count as unset (1.1) |
+| `issue.update` | `{ref, name?, description_html?, state?, estimate_point?, priority?, start_date?, target_date?, parent?, assignees?, labels?}` | `{issue}`; only set fields are sent, empty strings count as unset; `assignees` is a list of user UUIDs; `labels` accepts names (auto-resolved) or UUIDs (1.3) |
+| `issue.labels_patch` | `{ref, add: [names], remove_prefixes: [strings]}` | `{issue, labels}`; drops labels matching remove prefixes, adds names (idempotent, default colour "#7C3AED") (1.3) |
+| `user.me` | none | `{user: {id, email, display_name}}` (1.3) |
+| `issue.comments` | `{ref}` | `{comments: [{id, comment_html, created_at, updated_at}]}`, oldest first (1.3) |
+| `issue.comment_update` | `{ref, comment_id, comment_html}` | `{ok: true}`; updates comment HTML as-is (1.3) |
 | `issue.comment` | `{ref, comment}` | `{ok}`; the comment is wrapped in `<p>` without escaping, as the Go client did (1.1) |
 | `issue.set_status` | `{ref, status}` | `{issue, state, status}`; resolves against a single issue list |
 | `relations.batch` | `{issue_ids, fresh?}` | `{relations, errors, cached, fetched}` |
 | `cache.invalidate` | `{issue_ids?}` | `{ok}`; empty clears the project's cache. Call it after changing relations |
+| `project.archive` | none | `{ok}` (1.2) |
+| `project.delete` | none | `{ok}` (1.2) |
 
 Notes for clients: relations come from Plane's internal `/api/workspaces/.../issue-relation/` route because the public v1 API has none (it answers 404); status mapping is identical to Dendrite's Go `plane.StatusFor`; the Go side still owns the zero-mock quality gate before a move to Done or To Verify.
 

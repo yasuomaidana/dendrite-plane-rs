@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-plane-rs/proto/issue.comments.json",
+  "title": "issue.comments",
+  "description": "Protocol 1.3: Lists comments on an issue, oldest first. Error kinds: config, unauthorized, http, not_found, invalid, transport, decode.",
+  "params": {
+    "type": "object",
+    "required": [
+      "ref"
+    ],
+    "properties": {
+      "base_url": {
+        "type": "string",
+        "description": "Plane API base URL (optional, falls back to PLANE_BASE_URL)"
+      },
+      "workspace": {
+        "type": "string",
+        "description": "Plane workspace slug (optional, falls back to PLANE_WORKSPACE_SLUG)"
+      },
+      "project_id": {
+        "type": "string",
+        "description": "Plane project ID (optional, falls back to PLANE_PROJECT_ID)"
+      },
+      "ref": {
+        "type": "string",
+        "description": "DEN-n, the Plane number, or the issue UUID"
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "comments"
+    ],
+    "properties": {
+      "comments": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "id",
+            "comment_html",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "Comment UUID"
+            },
+            "comment_html": {
+              "type": "string",
+              "description": "Comment body in HTML"
+            },
+            "created_at": {
+              "type": "string",
+              "description": "Timestamp when comment was created"
+            },
+            "updated_at": {
+              "type": "string",
+              "description": "Timestamp when comment was last updated"
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "error_kind": {
+      "type": "string",
+      "enum": [
+        "config",
+        "unauthorized",
+        "http",
+        "not_found",
+        "invalid",
+        "transport",
+        "decode"
+      ]
+    }
+  }
+}

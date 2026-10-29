@@ -9,7 +9,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 /// Protocol version. Clients must reject a server whose major version differs from theirs.
-pub const PROTOCOL: &str = "1.2.0";
+pub const PROTOCOL: &str = "1.3.0";
 
 const PARSE_ERROR: i64 = -32700;
 const INVALID_REQUEST: i64 = -32600;
@@ -87,12 +87,34 @@ struct UpdateParams {
 }
 
 #[derive(Deserialize)]
+struct LabelsPatchParams {
+    #[serde(flatten)]
+    target: Target,
+    #[serde(rename = "ref")]
+    reference: String,
+    #[serde(default)]
+    add: Vec<String>,
+    #[serde(default)]
+    remove_prefixes: Vec<String>,
+}
+
+#[derive(Deserialize)]
 struct CommentParams {
     #[serde(flatten)]
     target: Target,
     #[serde(rename = "ref")]
     reference: String,
     comment: String,
+}
+
+#[derive(Deserialize)]
+struct CommentUpdateParams {
+    #[serde(flatten)]
+    target: Target,
+    #[serde(rename = "ref")]
+    reference: String,
+    comment_id: String,
+    comment_html: String,
 }
 
 #[derive(Deserialize)]
@@ -300,11 +322,50 @@ impl Server {
                 Ok(json!({ "issue": issue, "created": created }))
             }
             "issue.update" => {
-                let p: UpdateParams = parse(params)?;
-                let issue = self
-                    .client(&p.target)?
-                    .update_issue(&p.reference, &p.changes)?;
+                let mut p: UpdateParams = parse(params)?;
+                let client = self.client(&p.target)?;
+                if let Some(labels) = p.changes.labels {
+                    let mut resolved = Vec::with_capacity(labels.len());
+                    for l in &labels {
+                        if is_uuid(l) {
+                            resolved.push(l.clone());
+                        } else {
+                            let lbl = client.ensure_label(l, "#7C3AED")?;
+                            resolved.push(lbl.id);
+                        }
+                    }
+                    p.changes.labels = Some(resolved);
+                }
+                let issue = client.update_issue(&p.reference, &p.changes)?;
                 Ok(json!({ "issue": issue }))
+            }
+            "issue.labels_patch" => {
+                let p: LabelsPatchParams = parse(params)?;
+                let (issue, labels) = self.client(&p.target)?.patch_labels(
+                    &p.reference,
+                    &p.add,
+                    &p.remove_prefixes,
+                )?;
+                Ok(json!({ "issue": issue, "labels": labels }))
+            }
+            "user.me" => {
+                let t: Target = parse(params)?;
+                let user = self.client(&t)?.me()?;
+                Ok(json!({ "user": user }))
+            }
+            "issue.comments" => {
+                let p: RefParams = parse(params)?;
+                let comments = self.client(&p.target)?.list_comments(&p.reference)?;
+                Ok(json!({ "comments": comments }))
+            }
+            "issue.comment_update" => {
+                let p: CommentUpdateParams = parse(params)?;
+                self.client(&p.target)?.update_comment(
+                    &p.reference,
+                    &p.comment_id,
+                    &p.comment_html,
+                )?;
+                Ok(json!({ "ok": true }))
             }
             "issue.comment" => {
                 let p: CommentParams = parse(params)?;
@@ -388,4 +449,22 @@ fn fnv1a(key: &(String, String, String)) -> u64 {
         }
     }
     hash
+}
+
+fn is_uuid(s: &str) -> bool {
+    let r = s.trim();
+    if r.len() != 36 || r.matches('-').count() != 4 {
+        return false;
+    }
+    let parts: Vec<&str> = r.split('-').collect();
+    if parts.len() != 5
+        || parts[0].len() != 8
+        || parts[1].len() != 4
+        || parts[2].len() != 4
+        || parts[3].len() != 4
+        || parts[4].len() != 12
+    {
+        return false;
+    }
+    r.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
 }

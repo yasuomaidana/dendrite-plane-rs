@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yasuomaidana/dendrite-plane-rs/proto/user.me.json",
+  "title": "user.me",
+  "description": "Protocol 1.3: Gets the current authenticated user. Error kinds: config, unauthorized, http, not_found, invalid, transport, decode.",
+  "params": {
+    "type": "object",
+    "properties": {
+      "base_url": {
+        "type": "string",
+        "description": "Plane API base URL (optional, falls back to PLANE_BASE_URL)"
+      },
+      "workspace": {
+        "type": "string",
+        "description": "Plane workspace slug (optional, falls back to PLANE_WORKSPACE_SLUG)"
+      },
+      "project_id": {
+        "type": "string",
+        "description": "Plane project ID (optional, falls back to PLANE_PROJECT_ID)"
+      }
+    }
+  },
+  "result": {
+    "type": "object",
+    "required": [
+      "user"
+    ],
+    "properties": {
+      "user": {
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "display_name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "User UUID"
+          },
+          "email": {
+            "type": "string",
+            "description": "User email address"
+          },
+          "display_name": {
+            "type": "string",
+            "description": "User display name"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "error_kind": {
+      "type": "string",
+      "enum": [
+        "config",
+        "unauthorized",
+        "http",
+        "not_found",
+        "invalid",
+        "transport",
+        "decode"
+      ]
+    }
+  }
+}

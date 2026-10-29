@@ -1,27 +1,14 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
+use serde::Deserialize;
 use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
+use crate::relations::{DEFAULT_RELATIONS_TTL, RelationCache};
 use crate::resolve::resolve_issue;
-use crate::types::{
-    CreateIssue, Issue, Relations, State, Status, UpdateIssue, is_empty_context, status_for,
-};
-
-/// Relation requests in flight at once. Plane answers each in about 35ms, so a serial sweep of a
-/// few hundred issues takes many seconds while sixteen workers finish in about one.
-pub const RELATION_WORKERS: usize = 16;
-
-/// How long a fetched relation set is trusted. Plane does not bump an issue's `updated_at` when a
-/// relation is added or removed, so freshness cannot be detected cheaply; a short TTL plus
-/// invalidation on our own writes keeps dependencies current without re-fetching hundreds of
-/// issues on every call.
-pub const DEFAULT_RELATIONS_TTL: Duration = Duration::from_secs(60);
+use crate::types::{CreateIssue, Issue, State, Status, UpdateIssue, is_empty_context, status_for};
 
 /// The fields a list call needs for scheduling; leaves out the large description payloads.
 const MIN_FIELDS: &str = "id,name,sequence_id,state,priority,estimate_point,start_date,target_date,updated_at,external_id";
@@ -31,7 +18,7 @@ pub struct Config {
     pub base_url: String,
     pub workspace: String,
     pub project_id: String,
-    api_key: String,
+    pub(crate) api_key: String,
 }
 
 impl Config {
@@ -99,58 +86,12 @@ pub enum ListFields {
     Full,
 }
 
-/// Everything a scheduler needs from the board, fetched in one call.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct Snapshot {
-    /// Relation sets served from the cache and fetched from Plane for this snapshot.
-    pub relations_cached: usize,
-    pub relations_fetched: usize,
-    pub issues: Vec<Issue>,
-    /// Status of each issue, keyed by issue UUID.
-    pub statuses: HashMap<String, Status>,
-    /// Relations of every issue that is not Done or Cancelled, keyed by issue UUID.
-    pub relations: HashMap<String, Relations>,
-    /// How many relation lookups failed (those issues are simply absent from `relations`).
-    pub relation_errors: usize,
-}
-
-/// Outcome of [`Client::relations_batch`].
-#[derive(Debug, Default)]
-pub struct RelationsBatch {
-    pub relations: HashMap<String, Relations>,
-    pub failed: Vec<(String, Error)>,
-    pub cached: usize,
-    pub fetched: usize,
-}
-
-/// One cached relation set and when it was fetched (milliseconds since the Unix epoch, so the
-/// age survives across processes).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct CacheEntry {
-    fetched_ms: u64,
-    relations: Relations,
-}
-
-#[derive(Default)]
-struct RelationCache {
-    entries: HashMap<String, CacheEntry>,
-    /// Modification time of the cache file when it was last read or written by this process.
-    seen_mtime: Option<SystemTime>,
-}
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64)
-}
-
 pub struct Client {
-    cfg: Config,
-    agent: ureq::Agent,
-    relations_ttl: Duration,
-    cache: Mutex<RelationCache>,
-    /// Where the cache is shared between processes (short-lived CLI runs each start a sidecar).
-    cache_file: Option<PathBuf>,
+    pub(crate) cfg: Config,
+    pub(crate) agent: ureq::Agent,
+    pub(crate) relations_ttl: Duration,
+    pub(crate) cache: Mutex<RelationCache>,
+    pub(crate) cache_file: Option<PathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -186,79 +127,7 @@ impl Client {
         }
     }
 
-    /// Overrides how long cached relations are trusted (zero disables the cache).
-    pub fn with_relations_ttl(mut self, ttl: Duration) -> Client {
-        self.relations_ttl = ttl;
-        self
-    }
-
-    /// Shares the relation cache between processes through a file. The file is read when another
-    /// process changed it and rewritten atomically after every change here.
-    pub fn with_cache_file(mut self, path: PathBuf) -> Client {
-        self.cache_file = Some(path);
-        self
-    }
-
-    /// Forgets cached relations for these issues; call it after changing their relations.
-    pub fn invalidate_relations(&self, issue_ids: &[String]) {
-        let mut cache = self.cache.lock().unwrap();
-        self.reload_if_changed(&mut cache);
-        for id in issue_ids {
-            cache.entries.remove(id);
-        }
-        self.save(&mut cache);
-    }
-
-    pub fn clear_relations_cache(&self) {
-        let mut cache = self.cache.lock().unwrap();
-        cache.entries.clear();
-        self.save(&mut cache);
-    }
-
-    fn file_mtime(&self) -> Option<SystemTime> {
-        std::fs::metadata(self.cache_file.as_ref()?)
-            .and_then(|m| m.modified())
-            .ok()
-    }
-
-    /// Replaces the in-memory entries with the file's when another process rewrote it.
-    fn reload_if_changed(&self, cache: &mut RelationCache) {
-        let Some(path) = &self.cache_file else { return };
-        let mtime = self.file_mtime();
-        if mtime.is_none() || mtime == cache.seen_mtime {
-            return;
-        }
-        if let Ok(bytes) = std::fs::read(path)
-            && let Ok(entries) = serde_json::from_slice::<HashMap<String, CacheEntry>>(&bytes)
-        {
-            cache.entries = entries;
-        }
-        cache.seen_mtime = mtime;
-    }
-
-    /// Writes the cache atomically (temporary file, then rename). Failures only cost sharing.
-    fn save(&self, cache: &mut RelationCache) {
-        let Some(path) = &self.cache_file else { return };
-        let ttl_ms = (self.relations_ttl.as_millis() as u64).max(1);
-        let now = now_ms();
-        cache
-            .entries
-            .retain(|_, e| now.saturating_sub(e.fetched_ms) < ttl_ms);
-        let Ok(bytes) = serde_json::to_vec(&cache.entries) else {
-            return;
-        };
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        let tmp = path.with_extension(format!("tmp{}", std::process::id()));
-        if std::fs::write(&tmp, bytes).is_ok() && std::fs::rename(&tmp, path).is_ok() {
-            cache.seen_mtime = self.file_mtime();
-        } else {
-            let _ = std::fs::remove_file(&tmp);
-        }
-    }
-
-    fn project_url(&self, public_api: bool, tail: &str) -> String {
+    pub(crate) fn project_url(&self, public_api: bool, tail: &str) -> String {
         let api = if public_api { "api/v1" } else { "api" };
         format!(
             "{}/{api}/workspaces/{}/projects/{}/{tail}",
@@ -266,7 +135,7 @@ impl Client {
         )
     }
 
-    fn check(status: u16, what: &str) -> Result<()> {
+    pub(crate) fn check(status: u16, what: &str) -> Result<()> {
         match status {
             401 | 403 => Err(Error::Unauthorized(status)),
             s if s >= 400 => Err(Error::Http {
@@ -277,7 +146,7 @@ impl Client {
         }
     }
 
-    fn get<T: DeserializeOwned>(&self, url: &str, what: &str) -> Result<T> {
+    pub(crate) fn get<T: DeserializeOwned>(&self, url: &str, what: &str) -> Result<T> {
         let mut resp = self
             .agent
             .get(url)
@@ -327,115 +196,6 @@ impl Client {
         })
     }
 
-    /// Relations of one issue. Plane's public v1 API has no relations route (it answers 404), so this
-    /// uses the internal `/api/workspaces/...` path, which accepts the same API key.
-    pub fn relations(&self, issue_id: &str) -> Result<Relations> {
-        self.get(
-            &self.project_url(false, &format!("issues/{issue_id}/issue-relation/")),
-            "issue relations",
-        )
-    }
-
-    /// Relations for many issues. Entries younger than the TTL come from the cache unless `fresh` is
-    /// set; the rest are fetched by [`RELATION_WORKERS`] threads. Failures are reported next to the
-    /// successes instead of aborting the batch.
-    pub fn relations_batch(&self, issue_ids: &[String], fresh: bool) -> RelationsBatch {
-        let mut out = RelationsBatch::default();
-        let mut missing: Vec<String> = Vec::new();
-        {
-            let mut cache = self.cache.lock().unwrap();
-            self.reload_if_changed(&mut cache);
-            let (now, ttl_ms) = (now_ms(), self.relations_ttl.as_millis() as u64);
-            for id in issue_ids {
-                match cache.entries.get(id) {
-                    Some(e) if !fresh && now.saturating_sub(e.fetched_ms) < ttl_ms => {
-                        out.relations.insert(id.clone(), e.relations.clone());
-                        out.cached += 1;
-                    }
-                    _ => missing.push(id.clone()),
-                }
-            }
-        }
-        if missing.is_empty() {
-            return out;
-        }
-
-        let next = AtomicUsize::new(0);
-        let ok = Mutex::new(HashMap::with_capacity(missing.len()));
-        let failed = Mutex::new(Vec::new());
-        let workers = RELATION_WORKERS.min(missing.len());
-        std::thread::scope(|scope| {
-            for _ in 0..workers {
-                scope.spawn(|| {
-                    loop {
-                        let i = next.fetch_add(1, Ordering::Relaxed);
-                        let Some(id) = missing.get(i) else { return };
-                        match self.relations(id) {
-                            Ok(r) => {
-                                ok.lock().unwrap().insert(id.clone(), r);
-                            }
-                            Err(e) => failed.lock().unwrap().push((id.clone(), e)),
-                        }
-                    }
-                });
-            }
-        });
-        let fetched = ok.into_inner().unwrap();
-        out.fetched = fetched.len();
-        {
-            let now = now_ms();
-            let mut cache = self.cache.lock().unwrap();
-            // Another process may have cached other issues meanwhile; keep them.
-            self.reload_if_changed(&mut cache);
-            for (id, rel) in &fetched {
-                cache.entries.insert(
-                    id.clone(),
-                    CacheEntry {
-                        fetched_ms: now,
-                        relations: rel.clone(),
-                    },
-                );
-            }
-            self.save(&mut cache);
-        }
-        out.relations.extend(fetched);
-        out.failed = failed.into_inner().unwrap();
-        out
-    }
-
-    /// The whole board in one call: issues, their statuses, and relations for the open ones.
-    pub fn snapshot(&self, fresh: bool) -> Result<Snapshot> {
-        let issues = self.list_issues(ListFields::Min)?;
-        let by_state: HashMap<String, Status> = self
-            .list_states()?
-            .into_iter()
-            .map(|s| (s.id.clone(), status_for(&s.group, &s.name)))
-            .collect();
-        let statuses: HashMap<String, Status> = issues
-            .iter()
-            .map(|i| {
-                (
-                    i.id.clone(),
-                    by_state.get(&i.state).copied().unwrap_or(Status::Backlog),
-                )
-            })
-            .collect();
-        let open: Vec<String> = issues
-            .iter()
-            .filter(|i| !statuses[&i.id].is_closed())
-            .map(|i| i.id.clone())
-            .collect();
-        let batch = self.relations_batch(&open, fresh);
-        Ok(Snapshot {
-            issues,
-            statuses,
-            relations: batch.relations,
-            relation_errors: batch.failed.len(),
-            relations_cached: batch.cached,
-            relations_fetched: batch.fetched,
-        })
-    }
-
     /// Moves a ticket to the workflow state that maps to `status`. The ticket may be `DEN-n`, its
     /// Plane number or its UUID; it is resolved against one issue list, never two.
     pub fn set_status(&self, reference: &str, status: Status) -> Result<(Issue, State)> {
@@ -456,7 +216,12 @@ impl Client {
 
     /// POST or PATCH a JSON body and return Plane's status with the raw reply body, so callers can
     /// map 404 and 409 themselves before [`Client::check`] turns the rest into errors.
-    fn send(&self, method: &str, url: &str, body: serde_json::Value) -> Result<(u16, String)> {
+    pub(crate) fn send(
+        &self,
+        method: &str,
+        url: &str,
+        body: serde_json::Value,
+    ) -> Result<(u16, String)> {
         let req = match method {
             "PATCH" => self.agent.patch(url),
             _ => self.agent.post(url),
@@ -470,13 +235,13 @@ impl Client {
         Ok((status, text))
     }
 
-    fn decode<T: DeserializeOwned>(text: &str) -> Result<T> {
+    pub(crate) fn decode<T: DeserializeOwned>(text: &str) -> Result<T> {
         serde_json::from_str(text).map_err(|e| Error::Decode(e.to_string()))
     }
 
     /// A UUID is used as is; anything else (`DEN-n`, a Plane number) is resolved against one issue
     /// list, like [`Client::set_status`].
-    fn issue_id(&self, reference: &str) -> Result<String> {
+    pub(crate) fn issue_id(&self, reference: &str) -> Result<String> {
         let r = reference.trim();
         if r.len() == 36 && r.matches('-').count() == 4 {
             return Ok(r.to_string());
@@ -569,6 +334,12 @@ impl Client {
         put_text(&mut body, "priority", &req.priority);
         put_estimate(&mut body, req.estimate_point);
         put_dates(&mut body, &req.start_date, &req.target_date, &req.parent);
+        if let Some(assignees) = &req.assignees {
+            body.insert("assignees".into(), assignees.clone().into());
+        }
+        if let Some(labels) = &req.labels {
+            body.insert("labels".into(), labels.clone().into());
+        }
         let url = self.project_url(true, &format!("issues/{id}/"));
         let (status, text) = self.send("PATCH", &url, body.into())?;
         if status == 404 {
@@ -576,24 +347,6 @@ impl Client {
         }
         Self::check(status, "update issue")?;
         Self::decode(&text)
-    }
-
-    /// Adds a comment, wrapped in `<p>` exactly as the Go client does (the text is not escaped).
-    pub fn comment(&self, reference: &str, comment: &str) -> Result<()> {
-        if comment.trim().is_empty() {
-            return Err(Error::Invalid("comment cannot be empty".into()));
-        }
-        let id = self.issue_id(reference)?;
-        let url = self.project_url(true, &format!("issues/{id}/comments/"));
-        let (status, _) = self.send(
-            "POST",
-            &url,
-            serde_json::json!({ "comment_html": format!("<p>{comment}</p>") }),
-        )?;
-        if status == 404 {
-            return Err(Error::TicketNotFound(reference.to_string()));
-        }
-        Self::check(status, "add comment")
     }
 
     /// Archives the project. Plane answers 204 No Content.

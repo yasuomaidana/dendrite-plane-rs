@@ -7,16 +7,18 @@
 //! The API token is never defaulted: [`Config::from_env`] fails with [`Error::MissingToken`].
 
 mod client;
+mod comments;
 mod error;
+mod labels;
+mod relations;
 mod resolve;
 mod types;
 
-pub use client::{
-    Client, Config, DEFAULT_RELATIONS_TTL, ListFields, RELATION_WORKERS, RelationsBatch, Snapshot,
-};
+pub use client::{Client, Config, ListFields};
 pub use error::{Error, Result};
+pub use relations::{DEFAULT_RELATIONS_TTL, RELATION_WORKERS, RelationsBatch, Snapshot};
 pub use resolve::resolve_issue;
 pub use types::{
-    CreateIssue, Issue, LabelDetail, RelationRef, Relations, State, StateDetail, Status,
-    UpdateIssue, is_empty_context, status_for,
+    Comment, CreateIssue, Issue, Label, LabelDetail, RelationRef, Relations, State, StateDetail,
+    Status, UpdateIssue, User, is_empty_context, status_for,
 };

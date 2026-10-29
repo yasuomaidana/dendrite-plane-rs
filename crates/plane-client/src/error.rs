@@ -19,6 +19,8 @@ pub enum Error {
     TicketNotFound(String),
     #[error("no workflow state matches {0}")]
     StateNotFound(String),
+    #[error("no comment matches {0:?}")]
+    CommentNotFound(String),
     /// A create or update the caller must fix: nothing was sent to Plane.
     #[error("{0}")]
     Invalid(String),
@@ -34,9 +36,10 @@ impl Error {
             Error::MissingToken => "config",
             Error::Unauthorized(_) => "unauthorized",
             Error::Http { .. } => "http",
-            Error::ProjectNotFound(_) | Error::TicketNotFound(_) | Error::StateNotFound(_) => {
-                "not_found"
-            }
+            Error::ProjectNotFound(_)
+            | Error::TicketNotFound(_)
+            | Error::StateNotFound(_)
+            | Error::CommentNotFound(_) => "not_found",
             Error::Invalid(_) => "invalid",
             Error::Transport(_) => "transport",
             Error::Decode(_) => "decode",
