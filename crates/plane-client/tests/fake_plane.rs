@@ -37,8 +37,21 @@ pub struct Fake {
     pub peak_in_flight: Arc<AtomicUsize>,
 }
 
+/// Where the fake Plane serves the current user, as real Plane versions differ.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum UserRoute {
+    /// `/api/v1/users/me/`, the public API.
+    #[default]
+    V1,
+    /// Only `/api/users/me/`, as some self-hosted versions do.
+    InternalOnly,
+    /// Neither.
+    Missing,
+}
+
 #[derive(Debug, Clone)]
 pub struct FakeState {
+    pub user_route: UserRoute,
     pub user: serde_json::Value,
     pub labels: Vec<serde_json::Value>,
     pub issues: HashMap<String, serde_json::Value>,
@@ -48,6 +61,7 @@ pub struct FakeState {
 impl Default for FakeState {
     fn default() -> Self {
         FakeState {
+            user_route: UserRoute::V1,
             user: serde_json::json!({
                 "id": "usr-1",
                 "email": "agent@example.com",
@@ -101,7 +115,12 @@ pub fn handle_routes(req: &Req, state_lock: &Arc<Mutex<FakeState>>) -> Reply {
     let path = req.path_and_query.split('?').next().unwrap_or("");
 
     // 1. User route
-    if path == "/api/v1/users/me/" {
+    let user_path = match state.user_route {
+        UserRoute::V1 => Some("/api/v1/users/me/"),
+        UserRoute::InternalOnly => Some("/api/users/me/"),
+        UserRoute::Missing => None,
+    };
+    if Some(path) == user_path {
         if req.api_key.as_deref() == Some("wrong-key") {
             return Reply {
                 status: 401,

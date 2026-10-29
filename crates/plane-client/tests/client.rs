@@ -821,6 +821,55 @@ fn me_returns_user_and_handles_auth_error() {
     assert_eq!(err.kind(), "unauthorized");
 }
 
+/// The paths asked for the current user, in order.
+fn me_requests(fake: &Fake) -> Vec<String> {
+    fake.recorded()
+        .into_iter()
+        .map(|r| r.path_and_query)
+        .filter(|p| p.contains("users/me"))
+        .collect()
+}
+
+#[test]
+fn me_asks_the_public_route_once_when_it_exists() {
+    let (fake, _) = Fake::with_routes(fake_plane::FakeState::default());
+    assert_eq!(client(&fake).me().unwrap().id, "usr-1");
+    assert_eq!(me_requests(&fake), ["/api/v1/users/me/"]);
+}
+
+#[test]
+fn me_falls_back_to_the_internal_route_when_the_public_one_is_404() {
+    let state = fake_plane::FakeState {
+        user_route: fake_plane::UserRoute::InternalOnly,
+        ..fake_plane::FakeState::default()
+    };
+    let (fake, _) = Fake::with_routes(state);
+    let user = client(&fake).me().unwrap();
+    assert_eq!(user.id, "usr-1");
+    assert_eq!(user.email, "agent@example.com");
+    assert_eq!(
+        me_requests(&fake),
+        ["/api/v1/users/me/", "/api/users/me/"],
+        "the public route is tried first, then the internal one"
+    );
+
+    // A wrong key is still reported as such after the fallback.
+    let denied = Client::new(Config::new(&fake.url, "ws", "p", "wrong-key").unwrap());
+    assert_eq!(denied.me().unwrap_err().kind(), "unauthorized");
+}
+
+#[test]
+fn me_reports_the_404_when_neither_route_exists() {
+    let state = fake_plane::FakeState {
+        user_route: fake_plane::UserRoute::Missing,
+        ..fake_plane::FakeState::default()
+    };
+    let (fake, _) = Fake::with_routes(state);
+    let err = client(&fake).me().unwrap_err();
+    assert!(matches!(err, Error::Http { status: 404, .. }), "{err:?}");
+    assert_eq!(me_requests(&fake).len(), 2);
+}
+
 #[test]
 fn list_comments_returns_oldest_first_and_maps_unknown_ticket() {
     let mut state = fake_plane::FakeState::default();

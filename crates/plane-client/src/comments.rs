@@ -12,10 +12,16 @@ enum CommentsResponse {
 }
 
 impl Client {
-    /// Returns the currently authenticated user.
+    /// Returns the currently authenticated user. Plane's public API serves it at `/api/v1/users/me/`;
+    /// some self-hosted versions answer 404 there and only serve `/api/users/me/`, so that is tried next.
     pub fn me(&self) -> Result<User> {
-        let url = format!("{}/api/v1/users/me/", self.cfg.base_url);
-        self.get(&url, "get current user")
+        let base = &self.cfg.base_url;
+        match self.get(&format!("{base}/api/v1/users/me/"), "get current user") {
+            Err(Error::Http { status: 404, .. }) => {
+                self.get(&format!("{base}/api/users/me/"), "get current user")
+            }
+            other => other,
+        }
     }
 
     /// Adds a comment, wrapped in `<p>` exactly as the Go client does (the text is not escaped).
