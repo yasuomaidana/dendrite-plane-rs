@@ -1002,3 +1002,78 @@ fn update_issue_replaces_assignees_and_labels_and_preserves_unset() {
     assert_eq!(b["labels"], serde_json::json!([]));
     assert!(b.get("description_html").is_none());
 }
+
+/// A Plane like the self-hosted one: a single-issue read gives the state as a bare id.
+fn plane_with_bare_state_ids(issue_body: String) -> Fake {
+    Fake::start(move |req| {
+        let path = req.path_and_query.split('?').next().unwrap_or("");
+        if path.ends_with("/states/") {
+            json(STATES)
+        } else if path.ends_with(&format!("/issues/{UUID}/")) {
+            json(&issue_body)
+        } else {
+            Reply {
+                status: 404,
+                body: String::new(),
+                delay: Duration::ZERO,
+            }
+        }
+    })
+}
+
+fn states_requests(fake: &Fake) -> usize {
+    fake.recorded()
+        .iter()
+        .filter(|r| r.path_and_query.contains("/states/"))
+        .count()
+}
+
+#[test]
+fn get_issue_fills_state_detail_from_the_states_list() {
+    let fake = plane_with_bare_state_ids(issue(UUID, 5, "s-done", "[DEN-5] five"));
+    let got = client(&fake).get_issue(UUID).unwrap();
+    let detail = got.state_detail.expect("the state is resolved");
+    assert_eq!(
+        (detail.name.as_str(), detail.group.as_str()),
+        ("Done", "completed")
+    );
+    assert_eq!(states_requests(&fake), 1);
+}
+
+#[test]
+fn get_issue_leaves_an_unknown_state_unset_instead_of_failing() {
+    let fake = plane_with_bare_state_ids(issue(UUID, 5, "s-gone", "[DEN-5] five"));
+    let got = client(&fake).get_issue(UUID).unwrap();
+    assert_eq!(got.state, "s-gone");
+    assert!(got.state_detail.is_none());
+}
+
+#[test]
+fn get_issue_does_not_ask_for_states_when_plane_sends_the_detail() {
+    let body = format!(
+        r#"{{"id":"{UUID}","sequence_id":5,"state":"s-prog","name":"[DEN-5] five","state_detail":{{"name":"In Progress","group":"started"}}}}"#
+    );
+    let fake = plane_with_bare_state_ids(body);
+    let got = client(&fake).get_issue(UUID).unwrap();
+    assert_eq!(got.state_detail.unwrap().name, "In Progress");
+    assert_eq!(states_requests(&fake), 0);
+}
+
+#[test]
+fn get_issue_still_returns_the_issue_when_the_states_cannot_be_read() {
+    let fake = Fake::start(|req| {
+        let path = req.path_and_query.split('?').next().unwrap_or("");
+        if path.ends_with(&format!("/issues/{UUID}/")) {
+            json(&issue(UUID, 5, "s-done", "[DEN-5] five"))
+        } else {
+            Reply {
+                status: 500,
+                body: String::new(),
+                delay: Duration::ZERO,
+            }
+        }
+    });
+    let got = client(&fake).get_issue(UUID).unwrap();
+    assert_eq!(got.name, "[DEN-5] five");
+    assert!(got.state_detail.is_none());
+}

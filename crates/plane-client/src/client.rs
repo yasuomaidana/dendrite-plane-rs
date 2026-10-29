@@ -8,7 +8,9 @@ use serde::de::DeserializeOwned;
 use crate::error::{Error, Result};
 use crate::relations::{DEFAULT_RELATIONS_TTL, RelationCache};
 use crate::resolve::resolve_issue;
-use crate::types::{CreateIssue, Issue, State, Status, UpdateIssue, is_empty_context, status_for};
+use crate::types::{
+    CreateIssue, Issue, State, StateDetail, Status, UpdateIssue, is_empty_context, status_for,
+};
 
 /// The fields a list call needs for scheduling; leaves out the large description payloads.
 const MIN_FIELDS: &str = "id,name,sequence_id,state,priority,estimate_point,start_date,target_date,updated_at,external_id";
@@ -252,8 +254,26 @@ impl Client {
             .ok_or_else(|| Error::TicketNotFound(reference.to_string()))
     }
 
-    /// One issue with everything Plane returns for it (description, labels, state detail).
+    /// One issue with everything Plane returns for it (description, labels, state detail). Plane's
+    /// single-issue read gives the state as a bare id, so when it brings no `state_detail` the state is
+    /// looked up in the states list. A state that cannot be resolved leaves `state_detail` unset; callers
+    /// must not read an unset state as any particular lifecycle state.
     pub fn get_issue(&self, reference: &str) -> Result<Issue> {
+        let mut issue = self.read_issue(reference)?;
+        if issue.state_detail.is_none()
+            && !issue.state.is_empty()
+            && let Ok(states) = self.list_states()
+            && let Some(s) = states.into_iter().find(|s| s.id == issue.state)
+        {
+            issue.state_detail = Some(StateDetail {
+                name: s.name,
+                group: s.group,
+            });
+        }
+        Ok(issue)
+    }
+
+    fn read_issue(&self, reference: &str) -> Result<Issue> {
         let id = self.issue_id(reference)?;
         let url = self.project_url(true, &format!("issues/{id}/"));
         let mut resp = self
