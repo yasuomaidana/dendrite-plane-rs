@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/yasuomaidana/dendrite-plane-rs/proto/health.json",
   "title": "health",
-  "description": "Handshake. Protocol 1.1.0. Clients refuse a server whose protocol major version differs from theirs. Error kinds: config, unauthorized, http, not_found, invalid, transport, decode.",
+  "description": "Handshake. Protocol 1.2.0. Clients refuse a server whose protocol major version differs from theirs. Error kinds: config, unauthorized, http, not_found, invalid, transport, decode.",
   "params": {
     "type": ["object", "null"],
     "additionalProperties": false

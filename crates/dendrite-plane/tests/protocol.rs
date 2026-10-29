@@ -1,3 +1,6 @@
+#[path = "../../plane-client/tests/fake_plane.rs"]
+mod fake_plane;
+
 use dendrite_plane::{PROTOCOL, Server};
 use plane_client::Config;
 use serde_json::{Value, json};
@@ -83,8 +86,8 @@ fn a_project_is_required_somewhere() {
 }
 
 #[test]
-fn the_protocol_is_1_1_0() {
-    assert_eq!(PROTOCOL, "1.1.0");
+fn the_protocol_is_1_2_0() {
+    assert_eq!(PROTOCOL, "1.2.0");
 }
 
 #[test]
@@ -134,6 +137,8 @@ fn every_method_has_a_proto_schema() {
         "issue.set_status",
         "relations.batch",
         "cache.invalidate",
+        "project.archive",
+        "project.delete",
     ];
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../proto");
     for m in methods {
@@ -159,4 +164,63 @@ fn every_method_has_a_proto_schema() {
     let mut want: Vec<String> = methods.iter().map(|m| m.to_string()).collect();
     want.sort();
     assert_eq!(files, want);
+}
+
+#[test]
+fn project_archive_and_delete_return_ok_and_map_unknown_project() {
+    let fake = fake_plane::Fake::start(|req| {
+        let p = &req.path_and_query;
+        let archive = req.method == "POST" && p.contains("/projects/proj/archive/");
+        let delete = req.method == "DELETE" && p.contains("/projects/proj/");
+        if archive || delete {
+            fake_plane::Reply {
+                status: 204,
+                body: String::new(),
+                delay: std::time::Duration::ZERO,
+            }
+        } else if p.contains("/projects/unknown/") {
+            fake_plane::Reply {
+                status: 404,
+                body: "{}".into(),
+                delay: std::time::Duration::ZERO,
+            }
+        } else {
+            fake_plane::Reply {
+                status: 401,
+                body: "unauthorized".into(),
+                delay: std::time::Duration::ZERO,
+            }
+        }
+    });
+
+    let mut server = Server::with_config(Config::new(&fake.url, "ws", "proj", "k").unwrap());
+
+    // Both methods over the real stdio server return {"ok": true}
+    let r = call(&mut server, "project.archive", json!({}));
+    assert_eq!(r["result"]["ok"], true);
+
+    let r = call(&mut server, "project.delete", json!({}));
+    assert_eq!(r["result"]["ok"], true);
+
+    // An unknown project (fake answers 404) returns an error with kind not_found
+    let r = call(
+        &mut server,
+        "project.archive",
+        json!({"project_id": "unknown"}),
+    );
+    assert_eq!(r["error"]["code"], -32000);
+    assert_eq!(r["error"]["data"]["kind"], "not_found");
+
+    let r = call(
+        &mut server,
+        "project.delete",
+        json!({"project_id": "unknown"}),
+    );
+    assert_eq!(r["error"]["code"], -32000);
+    assert_eq!(r["error"]["data"]["kind"], "not_found");
+
+    // The health result reports the new protocol version
+    let r = call(&mut server, "health", json!({}));
+    assert_eq!(r["result"]["protocol"], "1.2.0");
+    assert_eq!(r["result"]["protocol"], PROTOCOL);
 }

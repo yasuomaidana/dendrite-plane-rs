@@ -619,3 +619,98 @@ fn comment_posts_the_go_html_and_maps_errors() {
         Err(Error::TicketNotFound(_))
     ));
 }
+
+#[test]
+fn archive_project_posts_to_archive_url_and_maps_errors() {
+    let fake = Fake::start(|req| {
+        if req.method == "POST"
+            && req.path_and_query == "/api/v1/workspaces/ws/projects/proj/archive/"
+        {
+            Reply {
+                status: 204,
+                body: String::new(),
+                delay: Duration::ZERO,
+            }
+        } else if req.path_and_query.contains("missing") {
+            Reply {
+                status: 404,
+                body: "{}".into(),
+                delay: Duration::ZERO,
+            }
+        } else {
+            Reply {
+                status: 401,
+                body: "unauthorized".into(),
+                delay: Duration::ZERO,
+            }
+        }
+    });
+
+    let c = client(&fake);
+    c.archive_project().unwrap();
+    let reqs = fake.recorded();
+    assert_eq!(reqs.len(), 1);
+    assert_eq!(reqs[0].method, "POST");
+    assert_eq!(
+        reqs[0].path_and_query,
+        "/api/v1/workspaces/ws/projects/proj/archive/"
+    );
+    assert_eq!(reqs[0].body, "{}");
+    assert_eq!(reqs[0].api_key.as_deref(), Some("test-key"));
+
+    let missing = Client::new(Config::new(&fake.url, "ws", "missing", "test-key").unwrap());
+    let err = missing.archive_project().unwrap_err();
+    assert_eq!(err.kind(), "not_found");
+    assert!(matches!(err, Error::ProjectNotFound(ref p) if p == "missing"));
+
+    let denied = Client::new(Config::new(&fake.url, "ws", "other", "wrong-key").unwrap());
+    let err = denied.archive_project().unwrap_err();
+    assert_eq!(err.kind(), "unauthorized");
+    assert!(matches!(err, Error::Unauthorized(401)));
+}
+
+#[test]
+fn delete_project_sends_delete_and_maps_errors() {
+    let fake = Fake::start(|req| {
+        if req.method == "DELETE" && req.path_and_query == "/api/v1/workspaces/ws/projects/proj/" {
+            Reply {
+                status: 204,
+                body: String::new(),
+                delay: Duration::ZERO,
+            }
+        } else if req.path_and_query.contains("missing") {
+            Reply {
+                status: 404,
+                body: "{}".into(),
+                delay: Duration::ZERO,
+            }
+        } else {
+            Reply {
+                status: 401,
+                body: "unauthorized".into(),
+                delay: Duration::ZERO,
+            }
+        }
+    });
+
+    let c = client(&fake);
+    c.delete_project().unwrap();
+    let reqs = fake.recorded();
+    assert_eq!(reqs.len(), 1);
+    assert_eq!(reqs[0].method, "DELETE");
+    assert_eq!(
+        reqs[0].path_and_query,
+        "/api/v1/workspaces/ws/projects/proj/"
+    );
+    assert_eq!(reqs[0].api_key.as_deref(), Some("test-key"));
+
+    let missing = Client::new(Config::new(&fake.url, "ws", "missing", "test-key").unwrap());
+    let err = missing.delete_project().unwrap_err();
+    assert_eq!(err.kind(), "not_found");
+    assert!(matches!(err, Error::ProjectNotFound(ref p) if p == "missing"));
+
+    let denied = Client::new(Config::new(&fake.url, "ws", "other", "wrong-key").unwrap());
+    let err = denied.delete_project().unwrap_err();
+    assert_eq!(err.kind(), "unauthorized");
+    assert!(matches!(err, Error::Unauthorized(401)));
+}

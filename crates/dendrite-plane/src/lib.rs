@@ -9,7 +9,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 /// Protocol version. Clients must reject a server whose major version differs from theirs.
-pub const PROTOCOL: &str = "1.1.0";
+pub const PROTOCOL: &str = "1.2.0";
 
 const PARSE_ERROR: i64 = -32700;
 const INVALID_REQUEST: i64 = -32600;
@@ -35,19 +35,10 @@ impl RpcError {
 
 impl From<Error> for RpcError {
     fn from(e: Error) -> RpcError {
-        let kind = match &e {
-            Error::MissingToken => "config",
-            Error::Unauthorized(_) => "unauthorized",
-            Error::Http { .. } => "http",
-            Error::TicketNotFound(_) | Error::StateNotFound(_) => "not_found",
-            Error::Invalid(_) => "invalid",
-            Error::Transport(_) => "transport",
-            Error::Decode(_) => "decode",
-        };
         RpcError {
             code: ENGINE_ERROR,
             message: e.to_string(),
-            kind: Some(kind),
+            kind: Some(e.kind()),
         }
     }
 }
@@ -178,7 +169,7 @@ impl Server {
         }
     }
 
-    fn client(&mut self, target: &Target) -> std::result::Result<&Client, RpcError> {
+    fn target_config(&self, target: &Target) -> std::result::Result<Config, RpcError> {
         let base = self
             .base
             .as_ref()
@@ -193,11 +184,15 @@ impl Server {
                 "project_id is required (or set PLANE_PROJECT_ID)",
             ));
         }
-        let cfg = base.with_project(
+        Ok(base.with_project(
             target.base_url.as_deref(),
             target.workspace.as_deref(),
             &project,
-        );
+        ))
+    }
+
+    fn client(&mut self, target: &Target) -> std::result::Result<&Client, RpcError> {
+        let cfg = self.target_config(target)?;
         let key = (
             cfg.base_url.clone(),
             cfg.workspace.clone(),
@@ -340,6 +335,30 @@ impl Server {
                 } else {
                     client.invalidate_relations(&p.issue_ids);
                 }
+                Ok(json!({ "ok": true }))
+            }
+            "project.archive" => {
+                let t: Target = parse(params)?;
+                let cfg = self.target_config(&t)?;
+                let key = (cfg.base_url, cfg.workspace, cfg.project_id);
+                {
+                    let client = self.client(&t)?;
+                    client.archive_project()?;
+                    client.clear_relations_cache();
+                }
+                self.clients.remove(&key);
+                Ok(json!({ "ok": true }))
+            }
+            "project.delete" => {
+                let t: Target = parse(params)?;
+                let cfg = self.target_config(&t)?;
+                let key = (cfg.base_url, cfg.workspace, cfg.project_id);
+                {
+                    let client = self.client(&t)?;
+                    client.delete_project()?;
+                    client.clear_relations_cache();
+                }
+                self.clients.remove(&key);
                 Ok(json!({ "ok": true }))
             }
             other => Err(RpcError {

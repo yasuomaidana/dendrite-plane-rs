@@ -13,6 +13,8 @@ pub enum Error {
     Unauthorized(u16),
     #[error("Plane returned HTTP {status} for {what}")]
     Http { status: u16, what: String },
+    #[error("no project matches {0:?}")]
+    ProjectNotFound(String),
     #[error("no ticket matches {0:?} (use DEN-n, its Plane number, or the issue UUID)")]
     TicketNotFound(String),
     #[error("no workflow state matches {0}")]
@@ -24,6 +26,22 @@ pub enum Error {
     Transport(String),
     #[error("could not read Plane's response: {0}")]
     Decode(String),
+}
+
+impl Error {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Error::MissingToken => "config",
+            Error::Unauthorized(_) => "unauthorized",
+            Error::Http { .. } => "http",
+            Error::ProjectNotFound(_) | Error::TicketNotFound(_) | Error::StateNotFound(_) => {
+                "not_found"
+            }
+            Error::Invalid(_) => "invalid",
+            Error::Transport(_) => "transport",
+            Error::Decode(_) => "decode",
+        }
+    }
 }
 
 impl From<ureq::Error> for Error {

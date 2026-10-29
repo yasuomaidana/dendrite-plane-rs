@@ -595,6 +595,32 @@ impl Client {
         }
         Self::check(status, "add comment")
     }
+
+    /// Archives the project. Plane answers 204 No Content.
+    pub fn archive_project(&self) -> Result<()> {
+        let url = self.project_url(true, "archive/");
+        let (status, _) = self.send("POST", &url, serde_json::json!({}))?;
+        if status == 404 {
+            return Err(Error::ProjectNotFound(self.cfg.project_id.clone()));
+        }
+        Self::check(status, "archive project")
+    }
+
+    /// Deletes the project permanently. Plane answers 204 No Content.
+    pub fn delete_project(&self) -> Result<()> {
+        let url = self.project_url(true, "");
+        let resp = self
+            .agent
+            .delete(&url)
+            .header("x-api-key", &self.cfg.api_key)
+            .header("Accept", "application/json")
+            .call()?;
+        let status = resp.status().as_u16();
+        if status == 404 {
+            return Err(Error::ProjectNotFound(self.cfg.project_id.clone()));
+        }
+        Self::check(status, "delete project")
+    }
 }
 
 fn put_text(body: &mut serde_json::Map<String, serde_json::Value>, key: &str, v: &Option<String>) {
