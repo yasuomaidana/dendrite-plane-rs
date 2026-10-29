@@ -3,6 +3,7 @@ mod fake_plane;
 
 use dendrite_plane::{PROTOCOL, Server};
 use plane_client::Config;
+use rstest::{fixture, rstest};
 use serde_json::{Value, json};
 
 fn call(server: &mut Server, method: &str, params: Value) -> Value {
@@ -10,22 +11,23 @@ fn call(server: &mut Server, method: &str, params: Value) -> Value {
     serde_json::from_str(&server.handle_line(&line).expect("a response")).unwrap()
 }
 
+#[fixture]
 fn offline() -> Server {
     // Nothing listens on this port: only protocol-level behavior is exercised.
     Server::with_config(Config::new("http://127.0.0.1:9", "ws", "proj", "k").unwrap())
 }
 
-#[test]
-fn health_reports_name_protocol_and_whether_a_token_is_configured() {
-    let r = call(&mut offline(), "health", json!({}));
+#[rstest]
+fn health_reports_name_protocol_and_whether_a_token_is_configured(mut offline: Server) {
+    let r = call(&mut offline, "health", json!({}));
     assert_eq!(r["result"]["name"], "dendrite-plane");
     assert_eq!(r["result"]["protocol"], PROTOCOL);
     assert_eq!(r["result"]["configured"], true);
 }
 
-#[test]
-fn protocol_errors_use_the_standard_codes() {
-    let mut s = offline();
+#[rstest]
+fn protocol_errors_use_the_standard_codes(offline: Server) {
+    let mut s = offline;
     assert_eq!(
         serde_json::from_str::<Value>(&s.handle_line("{nope").unwrap()).unwrap()["error"]["code"],
         -32700
@@ -56,18 +58,18 @@ fn protocol_errors_use_the_standard_codes() {
     );
 }
 
-#[test]
-fn notifications_get_no_reply() {
+#[rstest]
+fn notifications_get_no_reply(mut offline: Server) {
     assert!(
-        offline()
+        offline
             .handle_line(r#"{"jsonrpc":"2.0","method":"health"}"#)
             .is_none()
     );
 }
 
-#[test]
-fn transport_failures_are_engine_errors_with_a_kind() {
-    let r = call(&mut offline(), "states.list", json!({}));
+#[rstest]
+fn transport_failures_are_engine_errors_with_a_kind(mut offline: Server) {
+    let r = call(&mut offline, "states.list", json!({}));
     assert_eq!(r["error"]["code"], -32000);
     assert_eq!(r["error"]["data"]["kind"], "transport");
 }
@@ -90,9 +92,9 @@ fn the_protocol_is_1_3_0() {
     assert_eq!(PROTOCOL, "1.3.0");
 }
 
-#[test]
-fn new_issue_methods_validate_params_and_report_invalid_without_calling_plane() {
-    let mut s = offline();
+#[rstest]
+fn new_issue_methods_validate_params_and_report_invalid_without_calling_plane(offline: Server) {
+    let mut s = offline;
     for method in [
         "issue.get",
         "issue.update",

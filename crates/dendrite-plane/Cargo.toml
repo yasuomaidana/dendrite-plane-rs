@@ -18,3 +18,6 @@ path = "src/lib.rs"
 [[bin]]
 name = "dendrite-plane"
 path = "src/main.rs"
+
+[dev-dependencies]
+rstest = "0.28.0"

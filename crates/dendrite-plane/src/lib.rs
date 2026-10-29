@@ -8,6 +8,10 @@ use plane_client::{Client, Config, CreateIssue, Error, ListFields, Status, Updat
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+fn parse<T: for<'de> Deserialize<'de>>(params: Value) -> std::result::Result<T, RpcError> {
+    serde_json::from_value(params).map_err(|e| RpcError::params(e.to_string()))
+}
+
 /// Protocol version. Clients must reject a server whose major version differs from theirs.
 pub const PROTOCOL: &str = "1.3.0";
 
@@ -269,10 +273,39 @@ impl Server {
         })
     }
 
-    fn dispatch(&mut self, method: &str, params: Value) -> std::result::Result<Value, RpcError> {
-        fn parse<T: for<'de> Deserialize<'de>>(params: Value) -> std::result::Result<T, RpcError> {
-            serde_json::from_value(params).map_err(|e| RpcError::params(e.to_string()))
+    /// A call on one issue reference: parses the params, runs `call` and returns its result under `key`.
+    fn on_issue<T: serde::Serialize>(
+        &mut self,
+        params: Value,
+        key: &str,
+        call: impl FnOnce(&Client, &str) -> plane_client::Result<T>,
+    ) -> std::result::Result<Value, RpcError> {
+        let p: RefParams = parse(params)?;
+        let result = call(self.client(&p.target)?, &p.reference)?;
+        let mut out = serde_json::Map::new();
+        out.insert(key.to_string(), json!(result));
+        Ok(Value::Object(out))
+    }
+
+    /// Ends a project (archive or delete): runs `end`, drops the cached relations and the cached client.
+    fn end_project(
+        &mut self,
+        params: Value,
+        end: impl FnOnce(&Client) -> plane_client::Result<()>,
+    ) -> std::result::Result<Value, RpcError> {
+        let t: Target = parse(params)?;
+        let cfg = self.target_config(&t)?;
+        let key = (cfg.base_url, cfg.workspace, cfg.project_id);
+        {
+            let client = self.client(&t)?;
+            end(client)?;
+            client.clear_relations_cache();
         }
+        self.clients.remove(&key);
+        Ok(json!({ "ok": true }))
+    }
+
+    fn dispatch(&mut self, method: &str, params: Value) -> std::result::Result<Value, RpcError> {
         match method {
             "health" => Ok(json!({
                 "name": "dendrite-plane",
@@ -311,11 +344,7 @@ impl Server {
                     .ok_or_else(|| Error::TicketNotFound(p.reference.clone()))?;
                 Ok(json!({ "issue": issue }))
             }
-            "issue.get" => {
-                let p: RefParams = parse(params)?;
-                let issue = self.client(&p.target)?.get_issue(&p.reference)?;
-                Ok(json!({ "issue": issue }))
-            }
+            "issue.get" => self.on_issue(params, "issue", Client::get_issue),
             "issue.create" => {
                 let p: CreateParams = parse(params)?;
                 let (issue, created) = self.client(&p.target)?.create_issue(&p.issue)?;
@@ -353,11 +382,7 @@ impl Server {
                 let user = self.client(&t)?.me()?;
                 Ok(json!({ "user": user }))
             }
-            "issue.comments" => {
-                let p: RefParams = parse(params)?;
-                let comments = self.client(&p.target)?.list_comments(&p.reference)?;
-                Ok(json!({ "comments": comments }))
-            }
+            "issue.comments" => self.on_issue(params, "comments", Client::list_comments),
             "issue.comment_update" => {
                 let p: CommentUpdateParams = parse(params)?;
                 self.client(&p.target)?.update_comment(
@@ -398,30 +423,8 @@ impl Server {
                 }
                 Ok(json!({ "ok": true }))
             }
-            "project.archive" => {
-                let t: Target = parse(params)?;
-                let cfg = self.target_config(&t)?;
-                let key = (cfg.base_url, cfg.workspace, cfg.project_id);
-                {
-                    let client = self.client(&t)?;
-                    client.archive_project()?;
-                    client.clear_relations_cache();
-                }
-                self.clients.remove(&key);
-                Ok(json!({ "ok": true }))
-            }
-            "project.delete" => {
-                let t: Target = parse(params)?;
-                let cfg = self.target_config(&t)?;
-                let key = (cfg.base_url, cfg.workspace, cfg.project_id);
-                {
-                    let client = self.client(&t)?;
-                    client.delete_project()?;
-                    client.clear_relations_cache();
-                }
-                self.clients.remove(&key);
-                Ok(json!({ "ok": true }))
-            }
+            "project.archive" => self.end_project(params, Client::archive_project),
+            "project.delete" => self.end_project(params, Client::delete_project),
             other => Err(RpcError {
                 code: METHOD_NOT_FOUND,
                 message: format!("unknown method {other:?}"),
