@@ -5,6 +5,13 @@ Fast, long-lived access to [Plane](https://plane.so) for Dendrite. Two crates:
 - **`plane-client`**: a typed Plane API client. List calls use `per_page=100` and a field projection (about a third of the bytes), rows Plane repeats for each module an issue belongs to are dropped, relations are fetched by 16 worker threads and cached, and finished tickets (Done, Cancelled) are never asked for relations.
 - **`dendrite-plane`**: a JSON-RPC 2.0 sidecar over stdio (one message per line, logs on stderr), the same shape as `dendrite-rag`. Dendrite keeps one process alive instead of starting one per call.
 
+## Crates
+
+| Crate | Directory | Description |
+|---|---|---|
+| [`plane-client`](crates/plane-client) | `crates/plane-client` | Typed client for the Plane REST API with concurrent relation fetching and caching |
+| [`dendrite-plane`](crates/dendrite-plane) | `crates/dendrite-plane` | JSON-RPC 2.0 stdio sidecar exposing Plane operations to Dendrite processes |
+
 ## Why this exists
 
 Selecting the next ticket on a 369-issue board took 28 s. The issue list itself takes 0.3 s; the cost was one relations request per issue (35 ms each, serial). Plane serves about 70 of those per second, so threads alone reach about 4 s. Plane does **not** bump an issue's `updated_at` when a relation changes (verified), so staleness cannot be detected cheaply; the sidecar caches relations for 60 s (`DENDRITE_PLANE_RELATIONS_TTL_SECS`), clears them on `cache.invalidate`, and bypasses the cache with `fresh: true`.

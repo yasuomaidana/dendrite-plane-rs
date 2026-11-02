@@ -1,6 +1,7 @@
 [package]
 name = "plane-client"
 description = "Typed client for the Plane project-management API with concurrent relation fetching"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
