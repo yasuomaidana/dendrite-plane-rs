@@ -35,7 +35,7 @@ The primary types and entry points in `plane-client` are:
 
 ## Example
 
-```rust
+```rust,no_run
 use plane_client::{Client, Config, CreateIssue, ListFields, Status};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -85,11 +85,11 @@ This crate defines no optional Cargo feature flags.
 - **Workspace Crates**:
   - `dendrite-plane`: The stdio JSON-RPC 2.0 sidecar binary and server that wraps `plane-client` to provide long-lived Plane access for non-Rust components.
 - **Sibling Repositories**:
-  - `dendrite-core-rs`: Defines core agent execution primitives, tool abstractions, and tracker traits that integrate with `plane-client`.
-  - `dendrite-git-rs`: Manages git operations and isolated worktrees associated with tickets managed in Plane.
+  - `dendrite-core-rs`: syntax-aware code analysis (complexity, signature folding, hashing, token estimates) as the `dendrite-core` sidecar; it does not depend on this crate.
+  - `dendrite-git-rs`: in-process git hunk extraction (`dendrite-git`), with commit planning to come; it does not depend on this crate.
   - `dendrite-rag-rs`: Stdio JSON-RPC sidecar providing semantic retrieval and code index capabilities, using the same sidecar lifecycle patterns as `dendrite-plane`.
   - `dendrite-plane-rs`: This repository and workspace, housing both `plane-client` and `dendrite-plane`.
-  - `embedag`: Embeddings service used for indexing and vector search across Dendrite agents.
+  - `embedag`: graph and DAG building blocks (dependency ordering, Merkle delta trees, Graph-RAG primitives) as a Rust library; it does not depend on this crate.
   - `Dendrite control plane`: The primary Go orchestrator that coordinates agent task dispatching, ticket state tracking, and sidecar process lifecycles.
 
 ## Build and test

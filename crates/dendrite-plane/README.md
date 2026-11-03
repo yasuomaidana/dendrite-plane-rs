@@ -100,11 +100,11 @@ This crate defines no optional Cargo feature flags.
 - **Workspace Crates**:
   - `plane-client`: The core typed Plane client library that `dendrite-plane` wraps.
 - **Sibling Repositories**:
-  - `dendrite-core-rs`: Agent runtime that interfaces with tracker sidecars like `dendrite-plane`.
-  - `dendrite-git-rs`: Manages git branch and worktree lifecycles for issues tracked via `dendrite-plane`.
+  - `dendrite-core-rs`: syntax-aware code analysis (complexity, signature folding, hashing, token estimates) as the `dendrite-core` sidecar; it does not depend on this crate.
+  - `dendrite-git-rs`: in-process git hunk extraction (`dendrite-git`), with commit planning to come; it does not depend on this crate.
   - `dendrite-rag-rs`: Stdio JSON-RPC sidecar providing semantic codebase retrieval, matching the architectural patterns of `dendrite-plane`.
   - `dendrite-plane-rs`: The parent workspace containing `dendrite-plane` and `plane-client`.
-  - `embedag`: Embeddings service utilized by Dendrite agents.
+  - `embedag`: graph and DAG building blocks (dependency ordering, Merkle delta trees, Graph-RAG primitives) as a Rust library; it does not depend on this crate.
   - `Dendrite control plane`: Spawns and supervises `dendrite-plane` processes to drive agent issue tracking.
 
 ## Build and test

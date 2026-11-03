@@ -22,3 +22,8 @@ pub use types::{
     Comment, CreateIssue, Issue, Label, LabelDetail, RelationRef, Relations, State, StateDetail,
     Status, UpdateIssue, User, is_empty_context, status_for,
 };
+
+/// Compiles the Rust examples of the crate README as doctests, so they cannot drift from the code.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
