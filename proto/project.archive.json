@@ -2,13 +2,14 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/yasuomaidana/dendrite-plane-rs/proto/project.archive.json",
   "title": "project.archive",
-  "description": "Protocol 1.2: Archives a project. Error kinds: config, unauthorized, http, not_found, invalid, transport, decode.",
+  "description": "Protocol 1.4 (params 1.2): Archives a project. Error kinds: config, unauthorized, http, not_found, invalid, transport, decode.",
   "params": {
     "type": "object",
+    "required": ["project_id", "confirm"],
     "properties": {
       "base_url": {
         "type": "string",
-        "description": "Plane API base URL (optional, falls back to PLANE_BASE_URL)"
+        "description": "Plane API base URL (optional; omitted or equal to the configured PLANE_BASE_URL, or a loopback address only when the configured one is loopback; the API key is never sent elsewhere)"
       },
       "workspace": {
         "type": "string",
@@ -16,7 +17,12 @@
       },
       "project_id": {
         "type": "string",
-        "description": "Plane project ID (optional, falls back to PLANE_PROJECT_ID)"
+        "description": "Plane project ID. Required: the default project is never ended by an empty request"
+      },
+      "confirm": {
+        "type": "boolean",
+        "const": true,
+        "description": "Must be true"
       }
     }
   },

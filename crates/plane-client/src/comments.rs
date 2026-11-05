@@ -88,6 +88,11 @@ impl Client {
         if cid.is_empty() {
             return Err(Error::Invalid("comment id cannot be empty".into()));
         }
+        if !crate::types::is_path_segment(cid) {
+            return Err(Error::Invalid(
+                "comment id may contain only letters, digits, '-' and '_'".into(),
+            ));
+        }
         if comment_html.trim().is_empty() {
             return Err(Error::Invalid("comment cannot be empty".into()));
         }

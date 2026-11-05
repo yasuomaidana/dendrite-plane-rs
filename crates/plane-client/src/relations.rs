@@ -141,6 +141,11 @@ impl Client {
     /// Relations of one issue. Plane's public v1 API has no relations route (it answers 404), so this
     /// uses the internal `/api/workspaces/...` path, which accepts the same API key.
     pub fn relations(&self, issue_id: &str) -> Result<Relations> {
+        if !crate::types::is_path_segment(issue_id) {
+            return Err(Error::Invalid(
+                "issue id may contain only letters, digits, '-' and '_'".into(),
+            ));
+        }
         self.get(
             &self.project_url(false, &format!("issues/{issue_id}/issue-relation/")),
             "issue relations",

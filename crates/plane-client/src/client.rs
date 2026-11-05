@@ -9,7 +9,8 @@ use crate::error::{Error, Result};
 use crate::relations::{DEFAULT_RELATIONS_TTL, RelationCache};
 use crate::resolve::resolve_issue;
 use crate::types::{
-    CreateIssue, Issue, State, StateDetail, Status, UpdateIssue, is_empty_context, status_for,
+    CreateIssue, Issue, State, StateDetail, Status, UpdateIssue, is_empty_context, is_uuid,
+    status_for,
 };
 
 /// The fields a list call needs for scheduling; leaves out the large description payloads.
@@ -245,7 +246,7 @@ impl Client {
     /// list, like [`Client::set_status`].
     pub(crate) fn issue_id(&self, reference: &str) -> Result<String> {
         let r = reference.trim();
-        if r.len() == 36 && r.matches('-').count() == 4 {
+        if is_uuid(r) {
             return Ok(r.to_string());
         }
         let issues = self.list_issues(ListFields::Min)?;
