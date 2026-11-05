@@ -88,8 +88,8 @@ fn a_project_is_required_somewhere() {
 }
 
 #[test]
-fn the_protocol_is_1_4_0() {
-    assert_eq!(PROTOCOL, "1.4.0");
+fn the_protocol_is_1_4_1() {
+    assert_eq!(PROTOCOL, "1.4.1");
 }
 
 #[rstest]
@@ -253,7 +253,7 @@ fn project_archive_and_delete_return_ok_and_map_unknown_project() {
 
     // The health result reports the new protocol version
     let r = call(&mut server, "health", json!({}));
-    assert_eq!(r["result"]["protocol"], "1.4.0");
+    assert_eq!(r["result"]["protocol"], "1.4.1");
     assert_eq!(r["result"]["protocol"], PROTOCOL);
 }
 
@@ -488,4 +488,27 @@ fn the_configured_origin_may_be_repeated(mut offline: Server) {
         json!({"base_url": "http://127.0.0.1:9/"}),
     );
     assert_eq!(r["error"]["data"]["kind"], "transport");
+}
+
+#[rstest]
+#[case("http://evil.example", false)]
+#[case("http://127.0.0.1@evil.example", false)]
+#[case("ftp://127.0.0.1", false)]
+fn a_remote_base_url_is_refused_before_any_request(#[case] url: &str, #[case] _ok: bool) {
+    let mut server =
+        Server::with_config(Config::new("http://127.0.0.1:1", "ws", "proj", "k").unwrap());
+    let r = call(&mut server, "states.list", json!({"base_url": url}));
+    assert_eq!(r["error"]["code"], -32602);
+    assert!(r["error"]["message"].as_str().unwrap().contains("loopback"));
+}
+
+#[test]
+fn a_loopback_base_url_is_accepted_and_used() {
+    let state = fake_plane::FakeState::default();
+    let (fake, _) = fake_plane::Fake::with_routes(state);
+    // The configured origin is unreachable; the request names the loopback stand-in instead.
+    let mut server =
+        Server::with_config(Config::new("http://127.0.0.1:1", "ws", "proj", "k").unwrap());
+    let r = call(&mut server, "user.me", json!({"base_url": fake.url}));
+    assert_eq!(r["result"]["user"]["id"], "usr-1");
 }

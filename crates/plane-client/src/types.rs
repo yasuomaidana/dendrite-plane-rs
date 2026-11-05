@@ -295,6 +295,52 @@ pub fn is_path_segment(s: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
+/// The origin (`scheme://host[:port]`) of `url` when it is a plain `http`/`https` URL whose host is
+/// loopback (`localhost`, `127.0.0.0/8`, `::1`), and `None` for anything else: another host,
+/// userinfo (`http://127.0.0.1@evil.example`), a path, query or fragment, or a bad port.
+pub fn loopback_origin(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    if scheme != "http" && scheme != "https" {
+        return None;
+    }
+    let authority = rest.trim_end_matches('/');
+    if authority.is_empty() || authority.contains(['/', '?', '#', '@', '\\']) {
+        return None;
+    }
+    let (host, port) = match authority.strip_prefix('[') {
+        Some(v6) => {
+            let (host, tail) = v6.split_once(']')?;
+            (
+                format!("[{host}]"),
+                tail.strip_prefix(':').or(tail.is_empty().then_some("")),
+            )
+        }
+        None => match authority.split_once(':') {
+            Some((h, p)) => (h.to_string(), Some(p)),
+            None => (authority.to_string(), Some("")),
+        },
+    };
+    let port = port?;
+    if !port.is_empty()
+        && !(port.chars().all(|c| c.is_ascii_digit()) && port.parse::<u16>().is_ok())
+    {
+        return None;
+    }
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    let loopback = bare.eq_ignore_ascii_case("localhost")
+        || bare
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback());
+    if !loopback {
+        return None;
+    }
+    let colon = if port.is_empty() { "" } else { ":" };
+    Some(format!(
+        "{scheme}://{}{colon}{port}",
+        host.to_ascii_lowercase()
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -362,5 +408,32 @@ mod tests {
     #[case("", false)]
     fn is_path_segment_rejects_separators(#[case] input: &str, #[case] want: bool) {
         assert_eq!(is_path_segment(input), want);
+    }
+
+    #[rstest::rstest]
+    #[case("http://127.0.0.1:8090", Some("http://127.0.0.1:8090"))]
+    #[case("http://127.0.0.1:8090/", Some("http://127.0.0.1:8090"))]
+    #[case("http://localhost", Some("http://localhost"))]
+    #[case("HTTP://x", None)]
+    #[case("https://LOCALHOST:443", Some("https://localhost:443"))]
+    #[case("http://[::1]:3000", Some("http://[::1]:3000"))]
+    #[case("http://127.5.5.5:1", Some("http://127.5.5.5:1"))]
+    #[case("http://evil.example", None)]
+    #[case("http://127.0.0.1@evil.example", None)]
+    #[case("http://evil.example@127.0.0.1", None)]
+    #[case("http://127.0.0.1.evil.example", None)]
+    #[case("http://localhost.evil.example:80", None)]
+    #[case("http://127.0.0.1:99999", None)]
+    #[case("http://127.0.0.1:80x", None)]
+    #[case("http://127.0.0.1/api", None)]
+    #[case("http://127.0.0.1?x=1", None)]
+    #[case("ftp://127.0.0.1", None)]
+    #[case("file:///etc/passwd", None)]
+    #[case("", None)]
+    fn loopback_origin_accepts_only_plain_loopback_urls(
+        #[case] input: &str,
+        #[case] want: Option<&str>,
+    ) {
+        assert_eq!(loopback_origin(input).as_deref(), want);
     }
 }

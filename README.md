@@ -38,7 +38,7 @@ The token is never defaulted and never sent over the protocol.
 
 ## Protocol 1.4.0
 
-Every method that touches Plane accepts the optional `base_url`, `workspace` and `project_id`. `base_url` may only repeat the configured `PLANE_BASE_URL` (the API key is never sent to another host), and `workspace` and `project_id` must be plain identifiers (letters, digits, `-`, `_`). Errors use JSON-RPC codes `-32700`, `-32600`, `-32601`, `-32602`; engine failures are `-32000` with `data.kind` one of `config`, `unauthorized`, `http`, `not_found`, `invalid`, `transport`, `decode`. Each method has a JSON Schema in [`proto/`](proto/), checked by a test.
+Every method that touches Plane accepts the optional `base_url`, `workspace` and `project_id`. `base_url` may only repeat the configured `PLANE_BASE_URL` or name a loopback address (`localhost`, `127.0.0.0/8`, `::1`; the API key is never sent to another host), and `workspace` and `project_id` must be plain identifiers (letters, digits, `-`, `_`). Errors use JSON-RPC codes `-32700`, `-32600`, `-32601`, `-32602`; engine failures are `-32000` with `data.kind` one of `config`, `unauthorized`, `http`, `not_found`, `invalid`, `transport`, `decode`. Each method has a JSON Schema in [`proto/`](proto/), checked by a test.
 
 | Method | Params | Result |
 |---|---|---|

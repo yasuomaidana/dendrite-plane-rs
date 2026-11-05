@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Protocol 1.4.1: `base_url` may repeat the configured `PLANE_BASE_URL` or name a loopback address (`localhost`, `127.0.0.0/8`, `::1`), which the request then uses; other hosts, userinfo, paths and non-http schemes are still refused. Restores Dendrite's per-call `base_url` for local Plane instances and stand-ins after 1.4.0 ([DPLANE-18]).
+
 ### Security
 - Protocol 1.4.0: a request can no longer redirect the API key. `base_url` must equal the configured `PLANE_BASE_URL`, and `workspace` and `project_id` must be plain identifiers ([DPLANE-16]).
 - `project.archive` and `project.delete` require an explicit `project_id` and `confirm: true`; an empty request no longer ends the default project ([DPLANE-16]).
