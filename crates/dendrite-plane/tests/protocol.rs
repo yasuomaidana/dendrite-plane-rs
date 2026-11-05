@@ -88,8 +88,8 @@ fn a_project_is_required_somewhere() {
 }
 
 #[test]
-fn the_protocol_is_1_3_0() {
-    assert_eq!(PROTOCOL, "1.3.0");
+fn the_protocol_is_1_4_0() {
+    assert_eq!(PROTOCOL, "1.4.0");
 }
 
 #[rstest]
@@ -220,17 +220,25 @@ fn project_archive_and_delete_return_ok_and_map_unknown_project() {
     let mut server = Server::with_config(Config::new(&fake.url, "ws", "proj", "k").unwrap());
 
     // Both methods over the real stdio server return {"ok": true}
-    let r = call(&mut server, "project.archive", json!({}));
+    let r = call(
+        &mut server,
+        "project.archive",
+        json!({"project_id": "proj", "confirm": true}),
+    );
     assert_eq!(r["result"]["ok"], true);
 
-    let r = call(&mut server, "project.delete", json!({}));
+    let r = call(
+        &mut server,
+        "project.delete",
+        json!({"project_id": "proj", "confirm": true}),
+    );
     assert_eq!(r["result"]["ok"], true);
 
     // An unknown project (fake answers 404) returns an error with kind not_found
     let r = call(
         &mut server,
         "project.archive",
-        json!({"project_id": "unknown"}),
+        json!({"project_id": "unknown", "confirm": true}),
     );
     assert_eq!(r["error"]["code"], -32000);
     assert_eq!(r["error"]["data"]["kind"], "not_found");
@@ -238,14 +246,14 @@ fn project_archive_and_delete_return_ok_and_map_unknown_project() {
     let r = call(
         &mut server,
         "project.delete",
-        json!({"project_id": "unknown"}),
+        json!({"project_id": "unknown", "confirm": true}),
     );
     assert_eq!(r["error"]["code"], -32000);
     assert_eq!(r["error"]["data"]["kind"], "not_found");
 
     // The health result reports the new protocol version
     let r = call(&mut server, "health", json!({}));
-    assert_eq!(r["result"]["protocol"], "1.3.0");
+    assert_eq!(r["result"]["protocol"], "1.4.0");
     assert_eq!(r["result"]["protocol"], PROTOCOL);
 }
 
@@ -452,4 +460,32 @@ fn issue_labels_patch_protocol_method() {
     );
     assert_eq!(r["error"]["code"], -32000);
     assert_eq!(r["error"]["data"]["kind"], "not_found");
+}
+
+#[rstest]
+#[case("states.list", json!({"base_url": "http://attacker.example"}))]
+#[case("states.list", json!({"workspace": "a/../b"}))]
+#[case("states.list", json!({"project_id": "../x"}))]
+#[case("project.delete", json!({}))]
+#[case("project.delete", json!({"confirm": true}))]
+#[case("project.delete", json!({"project_id": "proj"}))]
+#[case("project.archive", json!({"project_id": "proj", "confirm": false}))]
+fn unsafe_targets_and_unconfirmed_ends_are_invalid_params(
+    mut offline: Server,
+    #[case] method: &str,
+    #[case] params: Value,
+) {
+    let r = call(&mut offline, method, params);
+    assert_eq!(r["error"]["code"], -32602, "{r}");
+}
+
+#[rstest]
+fn the_configured_origin_may_be_repeated(mut offline: Server) {
+    // Passes the origin check, then fails on the (closed) transport, not on the params.
+    let r = call(
+        &mut offline,
+        "states.list",
+        json!({"base_url": "http://127.0.0.1:9/"}),
+    );
+    assert_eq!(r["error"]["data"]["kind"], "transport");
 }

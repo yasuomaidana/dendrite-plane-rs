@@ -277,6 +277,24 @@ pub fn status_for(group: &str, name: &str) -> Status {
     }
 }
 
+/// True for a canonical 8-4-4-4-12 hexadecimal UUID, the only form that may be used as an issue id
+/// without a lookup.
+pub fn is_uuid(s: &str) -> bool {
+    let parts: Vec<&str> = s.trim().split('-').collect();
+    parts.len() == 5
+        && parts
+            .iter()
+            .zip([8, 4, 4, 4, 12])
+            .all(|(p, n)| p.len() == n && p.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
+/// True when `s` is safe to place in a URL path segment: letters, digits, `-` and `_` only.
+pub fn is_path_segment(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -323,5 +341,26 @@ mod tests {
         ] {
             assert_eq!(Status::parse(s.display_name()), Some(s));
         }
+    }
+
+    #[rstest::rstest]
+    #[case("123e4567-e89b-12d3-a456-426614174000", true)]
+    #[case("-/../../../../archive/-/-/-/-----", false)]
+    #[case("123e4567-e89b-12d3-a456-42661417400g", false)]
+    #[case("not-a-uuid", false)]
+    #[case("", false)]
+    fn is_uuid_accepts_only_canonical_uuids(#[case] input: &str, #[case] want: bool) {
+        assert_eq!(is_uuid(input), want);
+    }
+
+    #[rstest::rstest]
+    #[case("dendrite-ws", true)]
+    #[case("proj_1", true)]
+    #[case("a/b", false)]
+    #[case("..", false)]
+    #[case("a?b", false)]
+    #[case("", false)]
+    fn is_path_segment_rejects_separators(#[case] input: &str, #[case] want: bool) {
+        assert_eq!(is_path_segment(input), want);
     }
 }

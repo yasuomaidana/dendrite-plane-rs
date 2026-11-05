@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- Issue references are treated as ids only when they are canonical UUIDs (`is_uuid`); `is_path_segment` validates identifiers placed in URL paths ([DPLANE-16]).
+
 ## [0.1.0]
 
 ### Added

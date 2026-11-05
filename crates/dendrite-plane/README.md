@@ -36,14 +36,14 @@ echo '{"jsonrpc":"2.0","id":1,"method":"health","params":{}}' | cargo run -q -p 
 Expected stdout output (`configured` is `true` when `PLANE_API_KEY` is set in the environment):
 
 ```json
-{"id":1,"jsonrpc":"2.0","result":{"configured":false,"features":[],"name":"dendrite-plane","protocol":"1.3.0","version":"0.1.0"}}
+{"id":1,"jsonrpc":"2.0","result":{"configured":false,"features":[],"name":"dendrite-plane","protocol":"1.4.0","version":"0.1.0"}}
 ```
 
 ### Main types
 
 When used as a library, `dendrite-plane` exposes:
 
-- `PROTOCOL`: The supported protocol version string (`"1.3.0"`).
+- `PROTOCOL`: The supported protocol version string (`"1.4.0"`).
 - `Server`: The JSON-RPC request dispatcher.
   - `Server::from_env()`: Initializes the server reading `PLANE_API_KEY`, `PLANE_BASE_URL`, `PLANE_WORKSPACE_SLUG`, `PLANE_PROJECT_ID`, `DENDRITE_PLANE_RELATIONS_TTL_SECS`, and `DENDRITE_PLANE_CACHE_DIR`. If `PLANE_API_KEY` is missing, startup still succeeds, `health` reports `configured: false`, and subsequent Plane calls fail with error kind `config`.
   - `Server::with_config(cfg: Config)`: Initializes the server with an explicit `plane_client::Config`.
@@ -66,7 +66,7 @@ fn main() {
 
 ## Protocol methods
 
-`dendrite-plane` implements Protocol 1.3.0. Standard JSON-RPC errors use codes `-32700` (Parse error), `-32600` (Invalid request), `-32601` (Method not found), and `-32602` (Invalid params). Underlying engine errors use code `-32000` with `error.data.kind` set to one of `config`, `unauthorized`, `http`, `not_found`, `invalid`, `transport`, or `decode`.
+`dendrite-plane` implements Protocol 1.4.0. Standard JSON-RPC errors use codes `-32700` (Parse error), `-32600` (Invalid request), `-32601` (Method not found), and `-32602` (Invalid params). Underlying engine errors use code `-32000` with `error.data.kind` set to one of `config`, `unauthorized`, `http`, `not_found`, `invalid`, `transport`, or `decode`.
 
 | Method | Parameters | Result |
 |---|---|---|
@@ -86,10 +86,10 @@ fn main() {
 | `issue.set_status` | `{ref, status}` | `{issue, state, status}` |
 | `relations.batch` | `{issue_ids, fresh?}` | `{relations, errors, cached, fetched}` |
 | `cache.invalidate` | `{issue_ids?}` | `{ok: true}` |
-| `project.archive` | none | `{ok: true}` |
-| `project.delete` | none | `{ok: true}` |
+| `project.archive` | `{project_id, confirm: true}` | `{ok: true}` |
+| `project.delete` | `{project_id, confirm: true}` | `{ok: true}` |
 
-Every method accepting target parameters supports optional overrides for `base_url`, `workspace`, and `project_id`.
+Every method accepting target parameters supports optional overrides for `base_url`, `workspace`, and `project_id`; `base_url` may only repeat the configured origin and the other two must be plain identifiers. `project.archive` and `project.delete` require an explicit `project_id` and `confirm: true`.
 
 ## Feature flags
 

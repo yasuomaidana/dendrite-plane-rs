@@ -36,9 +36,9 @@ The token is never defaulted and never sent over the protocol.
 | `DENDRITE_PLANE_RELATIONS_TTL_SECS` | Relations cache lifetime, default 60. |
 | `DENDRITE_PLANE_CACHE_DIR` | When set, the relations cache is also kept in a file there, shared by every process (short-lived CLI runs each start their own sidecar). |
 
-## Protocol 1.3.0
+## Protocol 1.4.0
 
-Every method that touches Plane accepts the optional `base_url`, `workspace` and `project_id`. Errors use JSON-RPC codes `-32700`, `-32600`, `-32601`, `-32602`; engine failures are `-32000` with `data.kind` one of `config`, `unauthorized`, `http`, `not_found`, `invalid`, `transport`, `decode`. Each method has a JSON Schema in [`proto/`](proto/), checked by a test.
+Every method that touches Plane accepts the optional `base_url`, `workspace` and `project_id`. `base_url` may only repeat the configured `PLANE_BASE_URL` (the API key is never sent to another host), and `workspace` and `project_id` must be plain identifiers (letters, digits, `-`, `_`). Errors use JSON-RPC codes `-32700`, `-32600`, `-32601`, `-32602`; engine failures are `-32000` with `data.kind` one of `config`, `unauthorized`, `http`, `not_found`, `invalid`, `transport`, `decode`. Each method has a JSON Schema in [`proto/`](proto/), checked by a test.
 
 | Method | Params | Result |
 |---|---|---|
@@ -58,8 +58,8 @@ Every method that touches Plane accepts the optional `base_url`, `workspace` and
 | `issue.set_status` | `{ref, status}` | `{issue, state, status}`; resolves against a single issue list |
 | `relations.batch` | `{issue_ids, fresh?}` | `{relations, errors, cached, fetched}` |
 | `cache.invalidate` | `{issue_ids?}` | `{ok}`; empty clears the project's cache. Call it after changing relations |
-| `project.archive` | none | `{ok}` (1.2) |
-| `project.delete` | none | `{ok}` (1.2) |
+| `project.archive` | `{project_id, confirm: true}` | `{ok}`; both fields are required since 1.4 (1.2) |
+| `project.delete` | `{project_id, confirm: true}` | `{ok}`; both fields are required since 1.4 (1.2) |
 
 Notes for clients: relations come from Plane's internal `/api/workspaces/.../issue-relation/` route because the public v1 API has none (it answers 404); status mapping is identical to Dendrite's Go `plane.StatusFor`; the Go side still owns the zero-mock quality gate before a move to Done or To Verify.
 

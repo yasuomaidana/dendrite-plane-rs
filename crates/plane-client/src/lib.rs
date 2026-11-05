@@ -20,7 +20,7 @@ pub use relations::{DEFAULT_RELATIONS_TTL, RELATION_WORKERS, RelationsBatch, Sna
 pub use resolve::resolve_issue;
 pub use types::{
     Comment, CreateIssue, Issue, Label, LabelDetail, RelationRef, Relations, State, StateDetail,
-    Status, UpdateIssue, User, is_empty_context, status_for,
+    Status, UpdateIssue, User, is_empty_context, is_path_segment, is_uuid, status_for,
 };
 
 /// Compiles the Rust examples of the crate README as doctests, so they cannot drift from the code.

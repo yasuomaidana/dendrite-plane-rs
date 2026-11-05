@@ -4,7 +4,9 @@
 
 use std::collections::HashMap;
 
-use plane_client::{Client, Config, CreateIssue, Error, ListFields, Status, UpdateIssue};
+use plane_client::{
+    Client, Config, CreateIssue, Error, ListFields, Status, UpdateIssue, is_path_segment, is_uuid,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -13,7 +15,7 @@ fn parse<T: for<'de> Deserialize<'de>>(params: Value) -> std::result::Result<T, 
 }
 
 /// Protocol version. Clients must reject a server whose major version differs from theirs.
-pub const PROTOCOL: &str = "1.3.0";
+pub const PROTOCOL: &str = "1.4.0";
 
 const PARSE_ERROR: i64 = -32700;
 const INVALID_REQUEST: i64 = -32600;
@@ -54,6 +56,15 @@ struct Target {
     base_url: Option<String>,
     workspace: Option<String>,
     project_id: Option<String>,
+}
+
+/// Parameters of `project.archive` and `project.delete`.
+#[derive(Deserialize)]
+struct EndParams {
+    #[serde(flatten)]
+    target: Target,
+    #[serde(default)]
+    confirm: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -210,9 +221,26 @@ impl Server {
                 "project_id is required (or set PLANE_PROJECT_ID)",
             ));
         }
+        // The API key is sent to whatever `base_url` names, so a request may only repeat the
+        // configured origin; a path segment must not be able to change the route.
+        if let Some(url) = target.base_url.as_deref().filter(|u| !u.is_empty())
+            && url.trim_end_matches('/') != base.base_url
+        {
+            return Err(RpcError::params(
+                "base_url may only be the configured PLANE_BASE_URL",
+            ));
+        }
+        if let Some(ws) = target.workspace.as_deref().filter(|w| !w.is_empty())
+            && !is_path_segment(ws)
+        {
+            return Err(RpcError::params("workspace is not a valid slug"));
+        }
+        if !is_path_segment(&project) {
+            return Err(RpcError::params("project_id is not a valid identifier"));
+        }
         Ok(base.with_project(
-            target.base_url.as_deref(),
-            target.workspace.as_deref(),
+            None,
+            target.workspace.as_deref().filter(|w| !w.is_empty()),
             &project,
         ))
     }
@@ -293,7 +321,16 @@ impl Server {
         params: Value,
         end: impl FnOnce(&Client) -> plane_client::Result<()>,
     ) -> std::result::Result<Value, RpcError> {
-        let t: Target = parse(params)?;
+        let p: EndParams = parse(params)?;
+        let t = p.target;
+        // A destructive call names its project and says it means it; the default project is
+        // never the victim of an empty request.
+        if t.project_id.as_deref().is_none_or(str::is_empty) {
+            return Err(RpcError::params("project_id is required for this method"));
+        }
+        if p.confirm != Some(true) {
+            return Err(RpcError::params("confirm must be true for this method"));
+        }
         let cfg = self.target_config(&t)?;
         let key = (cfg.base_url, cfg.workspace, cfg.project_id);
         {
@@ -452,24 +489,6 @@ fn fnv1a(key: &(String, String, String)) -> u64 {
         }
     }
     hash
-}
-
-fn is_uuid(s: &str) -> bool {
-    let r = s.trim();
-    if r.len() != 36 || r.matches('-').count() != 4 {
-        return false;
-    }
-    let parts: Vec<&str> = r.split('-').collect();
-    if parts.len() != 5
-        || parts[0].len() != 8
-        || parts[1].len() != 4
-        || parts[2].len() != 4
-        || parts[3].len() != 4
-        || parts[4].len() != 12
-    {
-        return false;
-    }
-    r.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
 }
 
 /// Compiles the Rust examples of the crate README as doctests, so they cannot drift from the code.

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- Protocol 1.4.0: a request can no longer redirect the API key. `base_url` must equal the configured `PLANE_BASE_URL`, and `workspace` and `project_id` must be plain identifiers ([DPLANE-16]).
+- `project.archive` and `project.delete` require an explicit `project_id` and `confirm: true`; an empty request no longer ends the default project ([DPLANE-16]).
+- Issue references are used as ids only when they are real UUIDs, so a crafted 36-character string cannot reach another API route ([DPLANE-16]).
+
 ## [0.1.0]
 
 ### Added
