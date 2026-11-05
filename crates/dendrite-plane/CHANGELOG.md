@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- Protocol 1.4.2: a loopback `base_url` override is accepted only when the configured `PLANE_BASE_URL` is itself loopback, so a request can no longer send the API key to a local listener while Plane is remote ([DPLANE-20]). `comment_id` (`issue.comment_update`) and the issue ids of `relations.batch` must be plain identifiers, so `../` cannot reach another authenticated route ([DPLANE-19]).
+
 ### Fixed
 - Protocol 1.4.1: `base_url` may repeat the configured `PLANE_BASE_URL` or name a loopback address (`localhost`, `127.0.0.0/8`, `::1`), which the request then uses; other hosts, userinfo, paths and non-http schemes are still refused. Restores Dendrite's per-call `base_url` for local Plane instances and stand-ins after 1.4.0 ([DPLANE-18]).
 

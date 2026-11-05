@@ -16,7 +16,7 @@ fn parse<T: for<'de> Deserialize<'de>>(params: Value) -> std::result::Result<T, 
 }
 
 /// Protocol version. Clients must reject a server whose major version differs from theirs.
-pub const PROTOCOL: &str = "1.4.1";
+pub const PROTOCOL: &str = "1.4.2";
 
 const PARSE_ERROR: i64 = -32700;
 const INVALID_REQUEST: i64 = -32600;
@@ -169,6 +169,29 @@ struct InvalidateParams {
     issue_ids: Vec<String>,
 }
 
+/// The origin a request may send the API key to. The key goes to whatever `base_url` names, so a
+/// request may repeat the configured origin, or name a loopback one (a local stand-in) only when the
+/// configured Plane is itself on loopback; any other host is refused. `None` keeps the configured one.
+fn requested_origin(
+    requested: Option<&str>,
+    configured: &str,
+) -> std::result::Result<Option<String>, RpcError> {
+    let Some(url) = requested.filter(|u| !u.is_empty()) else {
+        return Ok(None);
+    };
+    if url.trim_end_matches('/') == configured {
+        return Ok(None);
+    }
+    if loopback_origin(configured).is_some()
+        && let Some(origin) = loopback_origin(url)
+    {
+        return Ok(Some(origin));
+    }
+    Err(RpcError::params(
+        "base_url may only be the configured PLANE_BASE_URL, or a loopback address when the configured one is loopback",
+    ))
+}
+
 pub struct Server {
     base: std::result::Result<Config, Error>,
     relations_ttl: std::time::Duration,
@@ -222,17 +245,7 @@ impl Server {
                 "project_id is required (or set PLANE_PROJECT_ID)",
             ));
         }
-        // The API key is sent to whatever `base_url` names, so a request may repeat the configured
-        // origin or name a loopback one (a local Plane or stand-in); any other host is refused.
-        let origin = match target.base_url.as_deref().filter(|u| !u.is_empty()) {
-            Some(url) if url.trim_end_matches('/') == base.base_url => None,
-            Some(url) => Some(loopback_origin(url).ok_or_else(|| {
-                RpcError::params(
-                    "base_url may only be the configured PLANE_BASE_URL or a loopback address",
-                )
-            })?),
-            None => None,
-        };
+        let origin = requested_origin(target.base_url.as_deref(), &base.base_url)?;
         if let Some(ws) = target.workspace.as_deref().filter(|w| !w.is_empty())
             && !is_path_segment(ws)
         {

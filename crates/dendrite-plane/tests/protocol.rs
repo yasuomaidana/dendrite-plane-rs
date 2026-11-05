@@ -89,7 +89,7 @@ fn a_project_is_required_somewhere() {
 
 #[test]
 fn the_protocol_is_1_4_1() {
-    assert_eq!(PROTOCOL, "1.4.1");
+    assert_eq!(PROTOCOL, "1.4.2");
 }
 
 #[rstest]
@@ -253,7 +253,7 @@ fn project_archive_and_delete_return_ok_and_map_unknown_project() {
 
     // The health result reports the new protocol version
     let r = call(&mut server, "health", json!({}));
-    assert_eq!(r["result"]["protocol"], "1.4.1");
+    assert_eq!(r["result"]["protocol"], "1.4.2");
     assert_eq!(r["result"]["protocol"], PROTOCOL);
 }
 
@@ -511,4 +511,16 @@ fn a_loopback_base_url_is_accepted_and_used() {
         Server::with_config(Config::new("http://127.0.0.1:1", "ws", "proj", "k").unwrap());
     let r = call(&mut server, "user.me", json!({"base_url": fake.url}));
     assert_eq!(r["result"]["user"]["id"], "usr-1");
+}
+
+#[rstest]
+#[case("http://127.0.0.1:9")]
+#[case("http://localhost:9")]
+#[case("http://[::1]:9")]
+fn a_loopback_override_is_refused_when_the_configured_plane_is_remote(#[case] url: &str) {
+    let mut server =
+        Server::with_config(Config::new("https://plane.example.com", "ws", "proj", "k").unwrap());
+    let r = call(&mut server, "states.list", json!({"base_url": url}));
+    assert_eq!(r["error"]["code"], -32602, "{r}");
+    assert!(r["error"]["message"].as_str().unwrap().contains("loopback"));
 }
