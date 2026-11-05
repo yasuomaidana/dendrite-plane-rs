@@ -300,38 +300,12 @@ pub fn is_path_segment(s: &str) -> bool {
 /// userinfo (`http://127.0.0.1@evil.example`), a path, query or fragment, or a bad port.
 pub fn loopback_origin(url: &str) -> Option<String> {
     let (scheme, rest) = url.split_once("://")?;
-    if scheme != "http" && scheme != "https" {
-        return None;
-    }
     let authority = rest.trim_end_matches('/');
-    if authority.is_empty() || authority.contains(['/', '?', '#', '@', '\\']) {
+    if !matches!(scheme, "http" | "https") || authority.contains(['/', '?', '#', '@', '\\']) {
         return None;
     }
-    let (host, port) = match authority.strip_prefix('[') {
-        Some(v6) => {
-            let (host, tail) = v6.split_once(']')?;
-            (
-                format!("[{host}]"),
-                tail.strip_prefix(':').or(tail.is_empty().then_some("")),
-            )
-        }
-        None => match authority.split_once(':') {
-            Some((h, p)) => (h.to_string(), Some(p)),
-            None => (authority.to_string(), Some("")),
-        },
-    };
-    let port = port?;
-    if !port.is_empty()
-        && !(port.chars().all(|c| c.is_ascii_digit()) && port.parse::<u16>().is_ok())
-    {
-        return None;
-    }
-    let bare = host.trim_start_matches('[').trim_end_matches(']');
-    let loopback = bare.eq_ignore_ascii_case("localhost")
-        || bare
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|ip| ip.is_loopback());
-    if !loopback {
+    let (host, port) = split_host_port(authority)?;
+    if !valid_port(port) || !is_loopback_host(host) {
         return None;
     }
     let colon = if port.is_empty() { "" } else { ":" };
@@ -339,6 +313,33 @@ pub fn loopback_origin(url: &str) -> Option<String> {
         "{scheme}://{}{colon}{port}",
         host.to_ascii_lowercase()
     ))
+}
+
+/// Splits `host[:port]` (a bracketed IPv6 host keeps its brackets); the port may be empty.
+fn split_host_port(authority: &str) -> Option<(&str, &str)> {
+    if authority.starts_with('[') {
+        let end = authority.find(']')?;
+        let tail = &authority[end + 1..];
+        let port = if tail.is_empty() {
+            ""
+        } else {
+            tail.strip_prefix(':')?
+        };
+        return Some((&authority[..=end], port));
+    }
+    Some(authority.split_once(':').unwrap_or((authority, "")))
+}
+
+fn valid_port(port: &str) -> bool {
+    port.is_empty() || (port.bytes().all(|b| b.is_ascii_digit()) && port.parse::<u16>().is_ok())
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    bare.eq_ignore_ascii_case("localhost")
+        || bare
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
 }
 
 #[cfg(test)]
