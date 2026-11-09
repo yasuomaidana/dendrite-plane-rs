@@ -7,7 +7,7 @@ use plane_client::{
     Client, Config, CreateIssue, Error, ListFields, RELATION_WORKERS, Status, UpdateIssue,
     is_empty_context,
 };
-use rstest::rstest;
+use rstest::{fixture, rstest};
 
 fn client(fake: &Fake) -> Client {
     Client::new(Config::new(&fake.url, "ws", "proj", "test-key").unwrap())
@@ -18,7 +18,13 @@ const STATES: &str = r#"{"results":[
   {"id":"s-prog","name":"In Progress","group":"started"},
   {"id":"s-done","name":"Done","group":"completed"}]}"#;
 
-fn issue(id: &str, seq: i64, state: &str, name: &str) -> String {
+#[fixture]
+fn issue(
+    #[default("a")] id: &str,
+    #[default(1)] seq: i64,
+    #[default("s-todo")] state: &str,
+    #[default("one")] name: &str,
+) -> String {
     format!(r#"{{"id":"{id}","sequence_id":{seq},"state":"{state}","name":"{name}"}}"#)
 }
 
@@ -389,7 +395,8 @@ fn body_of(fake: &Fake, method: &str) -> serde_json::Value {
     serde_json::from_str(&r.body).unwrap()
 }
 
-fn new_issue(name: &str) -> CreateIssue {
+#[fixture]
+fn new_issue(#[default("x")] name: &str) -> CreateIssue {
     CreateIssue {
         name: name.into(),
         description_html: "<p>goal</p>".into(),
@@ -504,8 +511,10 @@ fn create_refuses_an_empty_name_or_description_without_calling_plane() {
     assert!(fake.recorded().is_empty());
 }
 
-#[test]
-fn create_with_a_known_external_id_returns_the_existing_issue_without_posting() {
+#[rstest]
+fn create_with_a_known_external_id_returns_the_existing_issue_without_posting(
+    #[with("x")] mut new_issue: CreateIssue,
+) {
     let fake = Fake::start(|req| {
         assert_eq!(req.method, "GET", "nothing may be posted");
         json(
@@ -513,14 +522,14 @@ fn create_with_a_known_external_id_returns_the_existing_issue_without_posting() 
             "next_page_results":false,"next_cursor":""}"#,
         )
     });
-    let mut req = new_issue("x");
+    let req = &mut new_issue;
     req.external_id = Some("OXI-101".into());
-    let (issue, created) = client(&fake).create_issue(&req).unwrap();
+    let (issue, created) = client(&fake).create_issue(req).unwrap();
     assert_eq!((issue.id.as_str(), created), ("old", false));
 }
 
-#[test]
-fn create_treats_a_409_as_an_existing_issue() {
+#[rstest]
+fn create_treats_a_409_as_an_existing_issue(#[with("x")] mut new_issue: CreateIssue) {
     let listed = std::sync::atomic::AtomicUsize::new(0);
     let fake = Fake::start(move |req| {
         if req.method == "POST" {
@@ -541,9 +550,9 @@ fn create_treats_a_409_as_an_existing_issue() {
             r#"{{"results":[{rows}],"next_page_results":false,"next_cursor":""}}"#
         ))
     });
-    let mut req = new_issue("x");
+    let req = &mut new_issue;
     req.external_id = Some("E1".into());
-    let (issue, created) = client(&fake).create_issue(&req).unwrap();
+    let (issue, created) = client(&fake).create_issue(req).unwrap();
     assert_eq!((issue.id.as_str(), created), ("raced", false));
 }
 
@@ -992,9 +1001,11 @@ fn states_requests(fake: &Fake) -> usize {
         .count()
 }
 
-#[test]
-fn get_issue_fills_state_detail_from_the_states_list() {
-    let fake = plane_with_bare_state_ids(issue(UUID, 5, "s-done", "[DEN-5] five"));
+#[rstest]
+fn get_issue_fills_state_detail_from_the_states_list(
+    #[with(UUID, 5, "s-done", "[DEN-5] five")] issue: String,
+) {
+    let fake = plane_with_bare_state_ids(issue);
     let got = client(&fake).get_issue(UUID).unwrap();
     let detail = got.state_detail.expect("the state is resolved");
     assert_eq!(
@@ -1004,9 +1015,11 @@ fn get_issue_fills_state_detail_from_the_states_list() {
     assert_eq!(states_requests(&fake), 1);
 }
 
-#[test]
-fn get_issue_leaves_an_unknown_state_unset_instead_of_failing() {
-    let fake = plane_with_bare_state_ids(issue(UUID, 5, "s-gone", "[DEN-5] five"));
+#[rstest]
+fn get_issue_leaves_an_unknown_state_unset_instead_of_failing(
+    #[with(UUID, 5, "s-gone", "[DEN-5] five")] issue: String,
+) {
+    let fake = plane_with_bare_state_ids(issue);
     let got = client(&fake).get_issue(UUID).unwrap();
     assert_eq!(got.state, "s-gone");
     assert!(got.state_detail.is_none());

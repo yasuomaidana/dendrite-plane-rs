@@ -4,9 +4,10 @@
 
 use std::collections::HashMap;
 
+mod routes;
+
 use plane_client::{
-    Client, Config, CreateIssue, Error, ListFields, Status, UpdateIssue, is_path_segment, is_uuid,
-    loopback_origin,
+    Client, Config, CreateIssue, Error, UpdateIssue, is_path_segment, loopback_origin,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -172,10 +173,7 @@ struct InvalidateParams {
 /// The origin a request may send the API key to. The key goes to whatever `base_url` names, so a
 /// request may repeat the configured origin, or name a loopback one (a local stand-in) only when the
 /// configured Plane is itself on loopback; any other host is refused. `None` keeps the configured one.
-fn requested_origin(
-    requested: Option<&str>,
-    configured: &str,
-) -> Result<Option<String>, RpcError> {
+fn requested_origin(requested: Option<&str>, configured: &str) -> Result<Option<String>, RpcError> {
     let Some(url) = requested.filter(|u| !u.is_empty()) else {
         return Ok(None);
     };
@@ -356,134 +354,6 @@ impl Server {
         }
         self.clients.remove(&key);
         Ok(json!({ "ok": true }))
-    }
-
-    fn dispatch(&mut self, method: &str, params: Value) -> Result<Value, RpcError> {
-        match method {
-            "health" => Ok(json!({
-                "name": "dendrite-plane",
-                "version": env!("CARGO_PKG_VERSION"),
-                "protocol": PROTOCOL,
-                "features": [],
-                "configured": self.base.is_ok(),
-            })),
-            "board.snapshot" => {
-                let p: SnapshotParams = parse(params)?;
-                let snap = self.client(&p.target)?.snapshot(p.fresh)?;
-                Ok(serde_json::to_value(snap).expect("snapshot serializes"))
-            }
-            "issues.list" => {
-                let p: Fields = parse(params)?;
-                let fields = match p.fields.as_deref() {
-                    None | Some("min") => ListFields::Min,
-                    Some("full") => ListFields::Full,
-                    Some(other) => {
-                        return Err(RpcError::params(format!(
-                            "fields must be \"min\" or \"full\", got {other:?}"
-                        )));
-                    }
-                };
-                let issues = self.client(&p.target)?.list_issues(fields)?;
-                Ok(json!({ "issues": issues }))
-            }
-            "states.list" => {
-                let t: Target = parse(params)?;
-                Ok(json!({ "states": self.client(&t)?.list_states()? }))
-            }
-            "issue.resolve" => {
-                let p: RefParams = parse(params)?;
-                let issues = self.client(&p.target)?.list_issues(ListFields::Min)?;
-                let issue = plane_client::resolve_issue(&issues, &p.reference)
-                    .ok_or_else(|| Error::TicketNotFound(p.reference.clone()))?;
-                Ok(json!({ "issue": issue }))
-            }
-            "issue.get" => self.on_issue(params, "issue", Client::get_issue),
-            "issue.create" => {
-                let p: CreateParams = parse(params)?;
-                let (issue, created) = self.client(&p.target)?.create_issue(&p.issue)?;
-                Ok(json!({ "issue": issue, "created": created }))
-            }
-            "issue.update" => {
-                let mut p: UpdateParams = parse(params)?;
-                let client = self.client(&p.target)?;
-                if let Some(labels) = p.changes.labels {
-                    let mut resolved = Vec::with_capacity(labels.len());
-                    for l in &labels {
-                        if is_uuid(l) {
-                            resolved.push(l.clone());
-                        } else {
-                            let lbl = client.ensure_label(l, "#7C3AED")?;
-                            resolved.push(lbl.id);
-                        }
-                    }
-                    p.changes.labels = Some(resolved);
-                }
-                let issue = client.update_issue(&p.reference, &p.changes)?;
-                Ok(json!({ "issue": issue }))
-            }
-            "issue.labels_patch" => {
-                let p: LabelsPatchParams = parse(params)?;
-                let (issue, labels) = self.client(&p.target)?.patch_labels(
-                    &p.reference,
-                    &p.add,
-                    &p.remove_prefixes,
-                )?;
-                Ok(json!({ "issue": issue, "labels": labels }))
-            }
-            "user.me" => {
-                let t: Target = parse(params)?;
-                let user = self.client(&t)?.me()?;
-                Ok(json!({ "user": user }))
-            }
-            "issue.comments" => self.on_issue(params, "comments", Client::list_comments),
-            "issue.comment_update" => {
-                let p: CommentUpdateParams = parse(params)?;
-                self.client(&p.target)?.update_comment(
-                    &p.reference,
-                    &p.comment_id,
-                    &p.comment_html,
-                )?;
-                Ok(json!({ "ok": true }))
-            }
-            "issue.comment" => {
-                let p: CommentParams = parse(params)?;
-                self.client(&p.target)?.comment(&p.reference, &p.comment)?;
-                Ok(json!({ "ok": true }))
-            }
-            "issue.set_status" => {
-                let p: SetStatusParams = parse(params)?;
-                let status = Status::parse(&p.status)
-                    .ok_or_else(|| RpcError::params(format!("unknown status {:?}", p.status)))?;
-                let (issue, state) = self.client(&p.target)?.set_status(&p.reference, status)?;
-                Ok(json!({ "issue": issue, "state": state, "status": status }))
-            }
-            "relations.batch" => {
-                let p: BatchParams = parse(params)?;
-                let b = self
-                    .client(&p.target)?
-                    .relations_batch(&p.issue_ids, p.fresh);
-                Ok(
-                    json!({ "relations": b.relations, "errors": b.failed.len(), "cached": b.cached, "fetched": b.fetched }),
-                )
-            }
-            "cache.invalidate" => {
-                let p: InvalidateParams = parse(params)?;
-                let client = self.client(&p.target)?;
-                if p.issue_ids.is_empty() {
-                    client.clear_relations_cache();
-                } else {
-                    client.invalidate_relations(&p.issue_ids);
-                }
-                Ok(json!({ "ok": true }))
-            }
-            "project.archive" => self.end_project(params, Client::archive_project),
-            "project.delete" => self.end_project(params, Client::delete_project),
-            other => Err(RpcError {
-                code: METHOD_NOT_FOUND,
-                message: format!("unknown method {other:?}"),
-                kind: None,
-            }),
-        }
     }
 }
 

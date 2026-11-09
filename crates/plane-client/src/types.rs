@@ -256,25 +256,23 @@ impl Status {
 /// mapping, identical to Go's `plane.StatusFor`: Cancelled and Blocked are matched before the group
 /// checks because Plane files Blocked under "started".
 pub fn status_for(group: &str, name: &str) -> Status {
-    let g = group.to_lowercase();
-    let n = name.to_lowercase();
-    if g == "cancelled" || n.contains("cancel") {
-        Status::Cancelled
-    } else if n.contains("block") {
-        Status::Blocked
-    } else if g == "completed" || n.contains("done") {
-        Status::Done
-    } else if n.contains("review") || n.contains("verif") {
-        Status::InReview
-    } else if g == "started" || n.contains("progress") || n.contains("active") {
-        Status::InProgress
-    } else if g == "backlog" || n.contains("backlog") {
-        Status::Backlog
-    } else if g == "unstarted" || n.contains("todo") || n.contains("to do") {
-        Status::Todo
-    } else {
-        Status::Backlog
-    }
+    // (status, state group, name fragments); the first rule that matches wins.
+    const RULES: [(Status, &str, &[&str]); 7] = [
+        (Status::Cancelled, "cancelled", &["cancel"]),
+        (Status::Blocked, "", &["block"]),
+        (Status::Done, "completed", &["done"]),
+        (Status::InReview, "", &["review", "verif"]),
+        (Status::InProgress, "started", &["progress", "active"]),
+        (Status::Backlog, "backlog", &["backlog"]),
+        (Status::Todo, "unstarted", &["todo", "to do"]),
+    ];
+    let (g, n) = (group.to_lowercase(), name.to_lowercase());
+    RULES
+        .iter()
+        .find(|(_, grp, frags)| {
+            (!grp.is_empty() && g == *grp) || frags.iter().any(|f| n.contains(f))
+        })
+        .map_or(Status::Backlog, |rule| rule.0)
 }
 
 /// True for a canonical 8-4-4-4-12 hexadecimal UUID, the only form that may be used as an issue id
@@ -418,6 +416,7 @@ mod tests {
     #[case("HTTP://x", None)]
     #[case("https://LOCALHOST:443", Some("https://localhost:443"))]
     #[case("http://[::1]:3000", Some("http://[::1]:3000"))]
+    #[case("http://[::1]", Some("http://[::1]"))]
     #[case("http://127.5.5.5:1", Some("http://127.5.5.5:1"))]
     #[case("http://evil.example", None)]
     #[case("http://127.0.0.1@evil.example", None)]

@@ -524,3 +524,16 @@ fn a_loopback_override_is_refused_when_the_configured_plane_is_remote(#[case] ur
     assert_eq!(r["error"]["code"], -32602, "{r}");
     assert!(r["error"]["message"].as_str().unwrap().contains("loopback"));
 }
+
+#[rstest]
+fn a_workspace_override_changes_the_url_path() {
+    let fake = fake_plane::Fake::start(|_| fake_plane::json(r#"{"results":[]}"#));
+    let mut s = Server::with_config(Config::new(&fake.url, "ws", "proj", "k").unwrap());
+    let r = call(&mut s, "states.list", json!({"workspace": "other"}));
+    assert!(r.get("error").is_none(), "{r}");
+    assert!(
+        fake.recorded()[0]
+            .path_and_query
+            .starts_with("/api/v1/workspaces/other/")
+    );
+}

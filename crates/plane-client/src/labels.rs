@@ -71,47 +71,8 @@ impl Client {
         }
         let issue = self.get_issue(r)?;
         let all_labels = self.list_labels()?;
-        let mut id_to_name: HashMap<String, String> = HashMap::new();
-        for l in &all_labels {
-            id_to_name.insert(l.id.clone(), l.name.clone());
-        }
-        for d in &issue.label_details {
-            if !d.id.is_empty() && !d.name.is_empty() {
-                id_to_name.insert(d.id.clone(), d.name.clone());
-            }
-        }
-
-        let mut current_names: Vec<String> = Vec::new();
-        for id in &issue.labels {
-            if let Some(name) = id_to_name.get(id)
-                && !current_names.contains(name)
-            {
-                current_names.push(name.clone());
-            }
-        }
-        if current_names.is_empty() && issue.labels.is_empty() {
-            for d in &issue.label_details {
-                if !d.name.is_empty() && !current_names.contains(&d.name) {
-                    current_names.push(d.name.clone());
-                }
-            }
-        }
-
-        current_names.retain(|name| {
-            !remove_prefixes
-                .iter()
-                .any(|prefix| !prefix.is_empty() && name.starts_with(prefix))
-        });
-
-        for name in add {
-            let trimmed = name.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            if !current_names.iter().any(|n| n == trimmed) {
-                current_names.push(trimmed.to_string());
-            }
-        }
+        let mut current_names = current_label_names(&issue, &all_labels);
+        apply_patch(&mut current_names, add, remove_prefixes);
 
         // Labels the project already has are used by id; only the missing ones are created.
         let name_to_id: HashMap<&str, &str> = all_labels
@@ -132,5 +93,51 @@ impl Client {
         };
         let updated = self.update_issue(r, &upd)?;
         Ok((updated, current_names))
+    }
+}
+
+/// The distinct names of the labels on `issue`, in order. Ids are resolved through the project's
+/// labels and the issue's own label details; with no ids at all, the details' names are used.
+fn current_label_names(issue: &Issue, all_labels: &[Label]) -> Vec<String> {
+    let mut id_to_name: HashMap<&str, &str> = all_labels
+        .iter()
+        .map(|l| (l.id.as_str(), l.name.as_str()))
+        .collect();
+    let details = || issue.label_details.iter().filter(|d| !d.name.is_empty());
+    id_to_name.extend(
+        details()
+            .filter(|d| !d.id.is_empty())
+            .map(|d| (d.id.as_str(), d.name.as_str())),
+    );
+    let ids = issue
+        .labels
+        .iter()
+        .filter_map(|id| id_to_name.get(id.as_str()));
+    let names: Vec<&str> = if issue.labels.is_empty() {
+        details().map(|d| d.name.as_str()).collect()
+    } else {
+        ids.copied().collect()
+    };
+    let mut out: Vec<String> = Vec::new();
+    for name in names {
+        if !out.iter().any(|n| n == name) {
+            out.push(name.to_string());
+        }
+    }
+    out
+}
+
+/// Drops the names starting with any non-empty remove prefix, then appends the trimmed, non-empty
+/// `add` names that are not present yet.
+fn apply_patch(names: &mut Vec<String>, add: &[String], remove_prefixes: &[String]) {
+    names.retain(|name| {
+        !remove_prefixes
+            .iter()
+            .any(|prefix| !prefix.is_empty() && name.starts_with(prefix))
+    });
+    for trimmed in add.iter().map(|n| n.trim()).filter(|n| !n.is_empty()) {
+        if !names.iter().any(|n| n == trimmed) {
+            names.push(trimmed.to_string());
+        }
     }
 }
