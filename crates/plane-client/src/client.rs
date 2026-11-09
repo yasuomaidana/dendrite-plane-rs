@@ -9,7 +9,8 @@ use crate::error::{Error, Result};
 use crate::relations::{DEFAULT_RELATIONS_TTL, RelationCache};
 use crate::resolve::resolve_issue;
 use crate::types::{
-    CreateIssue, Issue, State, StateDetail, Status, UpdateIssue, is_empty_context, status_for,
+    CreateIssue, Issue, State, StateDetail, Status, UpdateIssue, is_empty_context, is_uuid,
+    status_for,
 };
 
 /// The fields a list call needs for scheduling; leaves out the large description payloads.
@@ -245,7 +246,7 @@ impl Client {
     /// list, like [`Client::set_status`].
     pub(crate) fn issue_id(&self, reference: &str) -> Result<String> {
         let r = reference.trim();
-        if r.len() == 36 && r.matches('-').count() == 4 {
+        if is_uuid(r) {
             return Ok(r.to_string());
         }
         let issues = self.list_issues(ListFields::Min)?;
@@ -296,37 +297,16 @@ impl Client {
     /// that id is returned with `created == false` and nothing is posted. Plane's 409 for a
     /// duplicate external id is treated the same way. Module and blocker links are not made here.
     pub fn create_issue(&self, req: &CreateIssue) -> Result<(Issue, bool)> {
-        if req.name.trim().is_empty() {
-            return Err(Error::Invalid("ticket name cannot be empty".into()));
-        }
-        if is_empty_context(&req.description_html) {
-            return Err(Error::Invalid(
-                "ticket context/description cannot be empty".into(),
-            ));
-        }
+        validate_new_issue(req)?;
         let external = req.external_id.as_deref().filter(|e| !e.is_empty());
         if let Some(ext) = external
             && let Some(found) = self.find_by_external_id(ext)?
         {
             return Ok((found, false));
         }
-        let mut body = serde_json::Map::new();
-        body.insert("name".into(), req.name.clone().into());
-        body.insert(
-            "description_html".into(),
-            req.description_html.clone().into(),
-        );
-        put_text(&mut body, "state", &req.state);
-        put_text(&mut body, "priority", &req.priority);
-        put_estimate(&mut body, req.estimate_point);
-        put_dates(&mut body, &req.start_date, &req.target_date, &req.parent);
-        put_text(&mut body, "external_id", &req.external_id);
-        put_text(&mut body, "external_source", &req.external_source);
-        if !req.labels.is_empty() {
-            body.insert("labels".into(), req.labels.clone().into());
-        }
+        let body = new_issue_body(req);
         let url = self.project_url(true, "issues/");
-        let (status, text) = self.send("POST", &url, body.into())?;
+        let (status, text) = self.send("POST", &url, body)?;
         if status == 409
             && let Some(ext) = external
             && let Some(found) = self.find_by_external_id(ext)?
@@ -425,4 +405,35 @@ fn put_dates(
             body.insert(key.into(), s.clone().into());
         }
     }
+}
+
+fn validate_new_issue(req: &CreateIssue) -> Result<()> {
+    if req.name.trim().is_empty() {
+        return Err(Error::Invalid("ticket name cannot be empty".into()));
+    }
+    if is_empty_context(&req.description_html) {
+        return Err(Error::Invalid(
+            "ticket context/description cannot be empty".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn new_issue_body(req: &CreateIssue) -> serde_json::Value {
+    let mut body = serde_json::Map::new();
+    body.insert("name".into(), req.name.clone().into());
+    body.insert(
+        "description_html".into(),
+        req.description_html.clone().into(),
+    );
+    put_text(&mut body, "state", &req.state);
+    put_text(&mut body, "priority", &req.priority);
+    put_estimate(&mut body, req.estimate_point);
+    put_dates(&mut body, &req.start_date, &req.target_date, &req.parent);
+    put_text(&mut body, "external_id", &req.external_id);
+    put_text(&mut body, "external_source", &req.external_source);
+    if !req.labels.is_empty() {
+        body.insert("labels".into(), req.labels.clone().into());
+    }
+    body.into()
 }

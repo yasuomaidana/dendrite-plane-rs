@@ -11,7 +11,7 @@
     "properties": {
       "base_url": {
         "type": "string",
-        "description": "Plane API base URL (optional, falls back to PLANE_BASE_URL)"
+        "description": "Plane API base URL (optional; omitted or equal to the configured PLANE_BASE_URL, or a loopback address only when the configured one is loopback; the API key is never sent elsewhere)"
       },
       "workspace": {
         "type": "string",

@@ -124,9 +124,8 @@ impl Client {
         cache
             .entries
             .retain(|_, e| now.saturating_sub(e.fetched_ms) < ttl_ms);
-        let Ok(bytes) = serde_json::to_vec(&cache.entries) else {
-            return;
-        };
+        // A map of strings to plain data always serializes.
+        let bytes = serde_json::to_vec(&cache.entries).unwrap_or_default();
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
@@ -141,6 +140,11 @@ impl Client {
     /// Relations of one issue. Plane's public v1 API has no relations route (it answers 404), so this
     /// uses the internal `/api/workspaces/...` path, which accepts the same API key.
     pub fn relations(&self, issue_id: &str) -> Result<Relations> {
+        if !crate::types::is_path_segment(issue_id) {
+            return Err(Error::Invalid(
+                "issue id may contain only letters, digits, '-' and '_'".into(),
+            ));
+        }
         self.get(
             &self.project_url(false, &format!("issues/{issue_id}/issue-relation/")),
             "issue relations",
@@ -152,35 +156,50 @@ impl Client {
     /// successes instead of aborting the batch.
     pub fn relations_batch(&self, issue_ids: &[String], fresh: bool) -> RelationsBatch {
         let mut out = RelationsBatch::default();
-        let mut missing: Vec<String> = Vec::new();
-        {
-            let mut cache = self.cache.lock().unwrap();
-            self.reload_if_changed(&mut cache);
-            let (now, ttl_ms) = (now_ms(), self.relations_ttl.as_millis() as u64);
-            for id in issue_ids {
-                match cache.entries.get(id) {
-                    Some(e) if !fresh && now.saturating_sub(e.fetched_ms) < ttl_ms => {
-                        out.relations.insert(id.clone(), e.relations.clone());
-                        out.cached += 1;
-                    }
-                    _ => missing.push(id.clone()),
-                }
-            }
-        }
+        let missing = self.take_cached(issue_ids, fresh, &mut out);
         if missing.is_empty() {
             return out;
         }
+        let (fetched, failed) = self.fetch_all(&missing);
+        out.fetched = fetched.len();
+        self.store_fetched(&fetched);
+        out.relations.extend(fetched);
+        out.failed = failed;
+        out
+    }
 
+    /// Moves the cache entries still within the TTL into `out` and returns the ids left to fetch.
+    fn take_cached(
+        &self,
+        issue_ids: &[String],
+        fresh: bool,
+        out: &mut RelationsBatch,
+    ) -> Vec<String> {
+        let mut missing = Vec::new();
+        let mut cache = self.cache.lock().unwrap();
+        self.reload_if_changed(&mut cache);
+        let (now, ttl_ms) = (now_ms(), self.relations_ttl.as_millis() as u64);
+        for id in issue_ids {
+            match cache.entries.get(id) {
+                Some(e) if !fresh && now.saturating_sub(e.fetched_ms) < ttl_ms => {
+                    out.relations.insert(id.clone(), e.relations.clone());
+                    out.cached += 1;
+                }
+                _ => missing.push(id.clone()),
+            }
+        }
+        missing
+    }
+
+    /// Fetches every id with up to [`RELATION_WORKERS`] threads; returns the successes and failures.
+    fn fetch_all(&self, missing: &[String]) -> (HashMap<String, Relations>, Vec<(String, Error)>) {
         let next = AtomicUsize::new(0);
         let ok = Mutex::new(HashMap::with_capacity(missing.len()));
         let failed = Mutex::new(Vec::new());
-        let workers = RELATION_WORKERS.min(missing.len());
         std::thread::scope(|scope| {
-            for _ in 0..workers {
+            for _ in 0..RELATION_WORKERS.min(missing.len()) {
                 scope.spawn(|| {
-                    loop {
-                        let i = next.fetch_add(1, Ordering::Relaxed);
-                        let Some(id) = missing.get(i) else { return };
+                    while let Some(id) = missing.get(next.fetch_add(1, Ordering::Relaxed)) {
                         match self.relations(id) {
                             Ok(r) => {
                                 ok.lock().unwrap().insert(id.clone(), r);
@@ -191,27 +210,24 @@ impl Client {
                 });
             }
         });
-        let fetched = ok.into_inner().unwrap();
-        out.fetched = fetched.len();
-        {
-            let now = now_ms();
-            let mut cache = self.cache.lock().unwrap();
-            // Another process may have cached other issues meanwhile; keep them.
-            self.reload_if_changed(&mut cache);
-            for (id, rel) in &fetched {
-                cache.entries.insert(
-                    id.clone(),
-                    CacheEntry {
-                        fetched_ms: now,
-                        relations: rel.clone(),
-                    },
-                );
-            }
-            self.save(&mut cache);
+        (ok.into_inner().unwrap(), failed.into_inner().unwrap())
+    }
+
+    fn store_fetched(&self, fetched: &HashMap<String, Relations>) {
+        let now = now_ms();
+        let mut cache = self.cache.lock().unwrap();
+        // Another process may have cached other issues meanwhile; keep them.
+        self.reload_if_changed(&mut cache);
+        for (id, rel) in fetched {
+            cache.entries.insert(
+                id.clone(),
+                CacheEntry {
+                    fetched_ms: now,
+                    relations: rel.clone(),
+                },
+            );
         }
-        out.relations.extend(fetched);
-        out.failed = failed.into_inner().unwrap();
-        out
+        self.save(&mut cache);
     }
 
     /// The whole board in one call: issues, their statuses, and relations for the open ones.

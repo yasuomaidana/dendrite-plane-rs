@@ -17,6 +17,7 @@ pub struct Req {
     pub body: String,
 }
 
+#[derive(Clone)]
 pub struct Reply {
     pub status: u16,
     pub body: String,
@@ -110,152 +111,133 @@ impl Fake {
     }
 }
 
-pub fn handle_routes(req: &Req, state_lock: &Arc<Mutex<FakeState>>) -> Reply {
+type State = Arc<Mutex<FakeState>>;
+
+fn status(code: u16) -> Reply {
+    Reply {
+        status: code,
+        body: if code == 404 { "{}" } else { "bad request" }.into(),
+        delay: Duration::ZERO,
+    }
+}
+
+fn parse_body(req: &Req) -> serde_json::Value {
+    serde_json::from_str(&req.body).unwrap_or_default()
+}
+
+pub fn handle_routes(req: &Req, state_lock: &State) -> Reply {
     let mut state = state_lock.lock().unwrap();
     let path = req.path_and_query.split('?').next().unwrap_or("");
+    route_user(req, path, &state)
+        .or_else(|| route_labels(req, path, &mut state))
+        .or_else(|| route_comments(req, path, &mut state))
+        .or_else(|| route_issues(req, path, &mut state))
+        .unwrap_or_else(|| status(404))
+}
 
-    // 1. User route
+fn route_user(req: &Req, path: &str, state: &FakeState) -> Option<Reply> {
     let user_path = match state.user_route {
-        UserRoute::V1 => Some("/api/v1/users/me/"),
-        UserRoute::InternalOnly => Some("/api/users/me/"),
-        UserRoute::Missing => None,
+        UserRoute::V1 => "/api/v1/users/me/",
+        UserRoute::InternalOnly => "/api/users/me/",
+        UserRoute::Missing => return None,
     };
-    if Some(path) == user_path {
-        if req.api_key.as_deref() == Some("wrong-key") {
-            return Reply {
-                status: 401,
-                body: "unauthorized".into(),
-                delay: Duration::ZERO,
-            };
-        }
-        return json(&state.user.to_string());
+    if path != user_path {
+        return None;
     }
+    if req.api_key.as_deref() == Some("wrong-key") {
+        return Some(Reply {
+            status: 401,
+            body: "unauthorized".into(),
+            delay: Duration::ZERO,
+        });
+    }
+    Some(json(&state.user.to_string()))
+}
 
-    // 2. Labels routes
-    if path.ends_with("/labels/") {
-        if req.method == "GET" {
-            let res = serde_json::json!({ "results": state.labels });
-            return json(&res.to_string());
-        }
-        if req.method == "POST" {
-            let body: serde_json::Value = match serde_json::from_str(&req.body) {
-                Ok(v) => v,
-                Err(_) => {
-                    return Reply {
-                        status: 400,
-                        body: "bad json".into(),
-                        delay: Duration::ZERO,
-                    };
-                }
+fn route_labels(req: &Req, path: &str, state: &mut FakeState) -> Option<Reply> {
+    if !path.ends_with("/labels/") {
+        return None;
+    }
+    match req.method.as_str() {
+        "GET" => Some(json(
+            &serde_json::json!({ "results": state.labels }).to_string(),
+        )),
+        "POST" => {
+            let Ok(body) = serde_json::from_str::<serde_json::Value>(&req.body) else {
+                return Some(status(400));
             };
-            let name = body["name"].as_str().unwrap_or("").to_string();
-            let color = body["color"].as_str().unwrap_or("#7C3AED").to_string();
-            let id = format!("lbl-{}", state.labels.len() + 1);
             let label = serde_json::json!({
-                "id": id,
-                "name": name,
-                "color": color,
+                "id": format!("lbl-{}", state.labels.len() + 1),
+                "name": body["name"].as_str().unwrap_or(""),
+                "color": body["color"].as_str().unwrap_or("#7C3AED"),
             });
             state.labels.push(label.clone());
-            return json(&label.to_string());
+            Some(json(&label.to_string()))
         }
+        _ => None,
     }
+}
 
-    // 3. Comments routes
-    if let Some(idx) = path.find("/issues/") {
-        let rest = &path[idx + "/issues/".len()..];
-        if let Some((issue_id, comment_part)) = rest.split_once("/comments/") {
-            if !state.issues.contains_key(issue_id) {
-                return Reply {
-                    status: 404,
-                    body: "{}".into(),
-                    delay: Duration::ZERO,
-                };
-            }
-            let cid = comment_part.trim_matches('/');
-            if cid.is_empty() {
-                // List or add comments
-                if req.method == "GET" {
-                    let list = state.comments.get(issue_id).cloned().unwrap_or_default();
-                    return json(&serde_json::json!({ "results": list }).to_string());
-                }
-                if req.method == "POST" {
-                    let body: serde_json::Value =
-                        serde_json::from_str(&req.body).unwrap_or_default();
-                    let html = body["comment_html"].as_str().unwrap_or("").to_string();
-                    let entry = state.comments.entry(issue_id.to_string()).or_default();
-                    let new_id = format!("c-{}", entry.len() + 1);
-                    let comment = serde_json::json!({
-                        "id": new_id,
-                        "comment_html": html,
-                        "created_at": format!("2026-10-28T12:00:{:02}Z", entry.len()),
-                        "updated_at": format!("2026-10-28T12:00:{:02}Z", entry.len()),
-                    });
-                    entry.push(comment);
-                    return json("{}");
-                }
-            } else {
-                // Comment update
-                if req.method == "PATCH" {
-                    let entry = state.comments.entry(issue_id.to_string()).or_default();
-                    if let Some(c) = entry.iter_mut().find(|c| c["id"] == cid) {
-                        let body: serde_json::Value =
-                            serde_json::from_str(&req.body).unwrap_or_default();
-                        if let Some(html) = body["comment_html"].as_str() {
-                            c["comment_html"] = serde_json::Value::String(html.to_string());
-                            c["updated_at"] =
-                                serde_json::Value::String("2026-10-28T12:30:00Z".to_string());
-                        }
-                        return json("{}");
-                    }
-                    return Reply {
-                        status: 404,
-                        body: "{}".into(),
-                        delay: Duration::ZERO,
-                    };
-                }
-            }
+fn route_comments(req: &Req, path: &str, state: &mut FakeState) -> Option<Reply> {
+    let idx = path.find("/issues/")?;
+    let (issue_id, comment_part) = path[idx + "/issues/".len()..].split_once("/comments/")?;
+    if !state.issues.contains_key(issue_id) {
+        return Some(status(404));
+    }
+    let cid = comment_part.trim_matches('/');
+    let entry = state.comments.entry(issue_id.to_string()).or_default();
+    match (req.method.as_str(), cid.is_empty()) {
+        ("GET", true) => Some(json(&serde_json::json!({ "results": entry }).to_string())),
+        ("POST", true) => {
+            let n = entry.len();
+            let stamp = format!("2026-10-28T12:00:{n:02}Z");
+            entry.push(serde_json::json!({
+                "id": format!("c-{}", n + 1),
+                "comment_html": parse_body(req)["comment_html"].as_str().unwrap_or(""),
+                "created_at": stamp,
+                "updated_at": stamp,
+            }));
+            Some(json("{}"))
         }
-    }
-
-    // 4. Issue routes
-    if let Some(idx) = path.find("/issues/") {
-        let rest = &path[idx + "/issues/".len()..];
-        let id = rest.trim_matches('/');
-        if id.is_empty() {
-            if req.method == "GET" {
-                let list: Vec<serde_json::Value> = state.issues.values().cloned().collect();
-                return json(
-                    &serde_json::json!({ "results": list, "next_page_results": false, "next_cursor": "" })
-                        .to_string(),
-                );
-            }
-        } else if let Some(iss) = state.issues.get_mut(id) {
-            if req.method == "GET" {
-                return json(&iss.to_string());
-            }
-            if req.method == "PATCH" {
-                let body: serde_json::Value = serde_json::from_str(&req.body).unwrap_or_default();
-                if let Some(obj) = body.as_object() {
-                    for (k, v) in obj {
-                        iss[k] = v.clone();
-                    }
+        ("PATCH", false) => Some(match entry.iter_mut().find(|c| c["id"] == cid) {
+            Some(c) => {
+                if let Some(html) = parse_body(req)["comment_html"].as_str() {
+                    c["comment_html"] = html.into();
+                    c["updated_at"] = "2026-10-28T12:30:00Z".into();
                 }
-                return json(&iss.to_string());
+                json("{}")
             }
-        } else {
-            return Reply {
-                status: 404,
-                body: "{}".into(),
-                delay: Duration::ZERO,
-            };
-        }
+            None => status(404),
+        }),
+        _ => None,
     }
+}
 
-    Reply {
-        status: 404,
-        body: "{}".into(),
-        delay: Duration::ZERO,
+fn route_issues(req: &Req, path: &str, state: &mut FakeState) -> Option<Reply> {
+    let idx = path.find("/issues/")?;
+    let id = path[idx + "/issues/".len()..].trim_matches('/');
+    if id.is_empty() {
+        if req.method != "GET" {
+            return None;
+        }
+        let list: Vec<serde_json::Value> = state.issues.values().cloned().collect();
+        return Some(json(
+            &serde_json::json!({ "results": list, "next_page_results": false, "next_cursor": "" })
+                .to_string(),
+        ));
+    }
+    let Some(iss) = state.issues.get_mut(id) else {
+        return Some(status(404));
+    };
+    match req.method.as_str() {
+        "GET" => Some(json(&iss.to_string())),
+        "PATCH" => {
+            for (k, v) in parse_body(req).as_object().into_iter().flatten() {
+                iss[k] = v.clone();
+            }
+            Some(json(&iss.to_string()))
+        }
+        _ => None,
     }
 }
 

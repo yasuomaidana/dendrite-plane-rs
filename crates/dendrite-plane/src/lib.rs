@@ -4,16 +4,20 @@
 
 use std::collections::HashMap;
 
-use plane_client::{Client, Config, CreateIssue, Error, ListFields, Status, UpdateIssue};
+mod routes;
+
+use plane_client::{
+    Client, Config, CreateIssue, Error, UpdateIssue, is_path_segment, loopback_origin,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-fn parse<T: for<'de> Deserialize<'de>>(params: Value) -> std::result::Result<T, RpcError> {
+fn parse<T: for<'de> Deserialize<'de>>(params: Value) -> Result<T, RpcError> {
     serde_json::from_value(params).map_err(|e| RpcError::params(e.to_string()))
 }
 
 /// Protocol version. Clients must reject a server whose major version differs from theirs.
-pub const PROTOCOL: &str = "1.3.0";
+pub const PROTOCOL: &str = "1.4.2";
 
 const PARSE_ERROR: i64 = -32700;
 const INVALID_REQUEST: i64 = -32600;
@@ -54,6 +58,15 @@ struct Target {
     base_url: Option<String>,
     workspace: Option<String>,
     project_id: Option<String>,
+}
+
+/// Parameters of `project.archive` and `project.delete`.
+#[derive(Deserialize)]
+struct EndParams {
+    #[serde(flatten)]
+    target: Target,
+    #[serde(default)]
+    confirm: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -157,8 +170,28 @@ struct InvalidateParams {
     issue_ids: Vec<String>,
 }
 
+/// The origin a request may send the API key to. The key goes to whatever `base_url` names, so a
+/// request may repeat the configured origin, or name a loopback one (a local stand-in) only when the
+/// configured Plane is itself on loopback; any other host is refused. `None` keeps the configured one.
+fn requested_origin(requested: Option<&str>, configured: &str) -> Result<Option<String>, RpcError> {
+    let Some(url) = requested.filter(|u| !u.is_empty()) else {
+        return Ok(None);
+    };
+    if url.trim_end_matches('/') == configured {
+        return Ok(None);
+    }
+    if loopback_origin(configured).is_some()
+        && let Some(origin) = loopback_origin(url)
+    {
+        return Ok(Some(origin));
+    }
+    Err(RpcError::params(
+        "base_url may only be the configured PLANE_BASE_URL, or a loopback address when the configured one is loopback",
+    ))
+}
+
 pub struct Server {
-    base: std::result::Result<Config, Error>,
+    base: Result<Config, Error>,
     relations_ttl: std::time::Duration,
     cache_dir: Option<std::path::PathBuf>,
     clients: HashMap<(String, String, String), Client>,
@@ -195,7 +228,7 @@ impl Server {
         }
     }
 
-    fn target_config(&self, target: &Target) -> std::result::Result<Config, RpcError> {
+    fn target_config(&self, target: &Target) -> Result<Config, RpcError> {
         let base = self
             .base
             .as_ref()
@@ -210,14 +243,23 @@ impl Server {
                 "project_id is required (or set PLANE_PROJECT_ID)",
             ));
         }
+        let origin = requested_origin(target.base_url.as_deref(), &base.base_url)?;
+        if let Some(ws) = target.workspace.as_deref().filter(|w| !w.is_empty())
+            && !is_path_segment(ws)
+        {
+            return Err(RpcError::params("workspace is not a valid slug"));
+        }
+        if !is_path_segment(&project) {
+            return Err(RpcError::params("project_id is not a valid identifier"));
+        }
         Ok(base.with_project(
-            target.base_url.as_deref(),
-            target.workspace.as_deref(),
+            origin.as_deref(),
+            target.workspace.as_deref().filter(|w| !w.is_empty()),
             &project,
         ))
     }
 
-    fn client(&mut self, target: &Target) -> std::result::Result<&Client, RpcError> {
+    fn client(&mut self, target: &Target) -> Result<&Client, RpcError> {
         let cfg = self.target_config(target)?;
         let key = (
             cfg.base_url.clone(),
@@ -279,7 +321,7 @@ impl Server {
         params: Value,
         key: &str,
         call: impl FnOnce(&Client, &str) -> plane_client::Result<T>,
-    ) -> std::result::Result<Value, RpcError> {
+    ) -> Result<Value, RpcError> {
         let p: RefParams = parse(params)?;
         let result = call(self.client(&p.target)?, &p.reference)?;
         let mut out = serde_json::Map::new();
@@ -292,8 +334,17 @@ impl Server {
         &mut self,
         params: Value,
         end: impl FnOnce(&Client) -> plane_client::Result<()>,
-    ) -> std::result::Result<Value, RpcError> {
-        let t: Target = parse(params)?;
+    ) -> Result<Value, RpcError> {
+        let p: EndParams = parse(params)?;
+        let t = p.target;
+        // A destructive call names its project and says it means it; the default project is
+        // never the victim of an empty request.
+        if t.project_id.as_deref().is_none_or(str::is_empty) {
+            return Err(RpcError::params("project_id is required for this method"));
+        }
+        if p.confirm != Some(true) {
+            return Err(RpcError::params("confirm must be true for this method"));
+        }
         let cfg = self.target_config(&t)?;
         let key = (cfg.base_url, cfg.workspace, cfg.project_id);
         {
@@ -303,134 +354,6 @@ impl Server {
         }
         self.clients.remove(&key);
         Ok(json!({ "ok": true }))
-    }
-
-    fn dispatch(&mut self, method: &str, params: Value) -> std::result::Result<Value, RpcError> {
-        match method {
-            "health" => Ok(json!({
-                "name": "dendrite-plane",
-                "version": env!("CARGO_PKG_VERSION"),
-                "protocol": PROTOCOL,
-                "features": [],
-                "configured": self.base.is_ok(),
-            })),
-            "board.snapshot" => {
-                let p: SnapshotParams = parse(params)?;
-                let snap = self.client(&p.target)?.snapshot(p.fresh)?;
-                Ok(serde_json::to_value(snap).expect("snapshot serializes"))
-            }
-            "issues.list" => {
-                let p: Fields = parse(params)?;
-                let fields = match p.fields.as_deref() {
-                    None | Some("min") => ListFields::Min,
-                    Some("full") => ListFields::Full,
-                    Some(other) => {
-                        return Err(RpcError::params(format!(
-                            "fields must be \"min\" or \"full\", got {other:?}"
-                        )));
-                    }
-                };
-                let issues = self.client(&p.target)?.list_issues(fields)?;
-                Ok(json!({ "issues": issues }))
-            }
-            "states.list" => {
-                let t: Target = parse(params)?;
-                Ok(json!({ "states": self.client(&t)?.list_states()? }))
-            }
-            "issue.resolve" => {
-                let p: RefParams = parse(params)?;
-                let issues = self.client(&p.target)?.list_issues(ListFields::Min)?;
-                let issue = plane_client::resolve_issue(&issues, &p.reference)
-                    .ok_or_else(|| Error::TicketNotFound(p.reference.clone()))?;
-                Ok(json!({ "issue": issue }))
-            }
-            "issue.get" => self.on_issue(params, "issue", Client::get_issue),
-            "issue.create" => {
-                let p: CreateParams = parse(params)?;
-                let (issue, created) = self.client(&p.target)?.create_issue(&p.issue)?;
-                Ok(json!({ "issue": issue, "created": created }))
-            }
-            "issue.update" => {
-                let mut p: UpdateParams = parse(params)?;
-                let client = self.client(&p.target)?;
-                if let Some(labels) = p.changes.labels {
-                    let mut resolved = Vec::with_capacity(labels.len());
-                    for l in &labels {
-                        if is_uuid(l) {
-                            resolved.push(l.clone());
-                        } else {
-                            let lbl = client.ensure_label(l, "#7C3AED")?;
-                            resolved.push(lbl.id);
-                        }
-                    }
-                    p.changes.labels = Some(resolved);
-                }
-                let issue = client.update_issue(&p.reference, &p.changes)?;
-                Ok(json!({ "issue": issue }))
-            }
-            "issue.labels_patch" => {
-                let p: LabelsPatchParams = parse(params)?;
-                let (issue, labels) = self.client(&p.target)?.patch_labels(
-                    &p.reference,
-                    &p.add,
-                    &p.remove_prefixes,
-                )?;
-                Ok(json!({ "issue": issue, "labels": labels }))
-            }
-            "user.me" => {
-                let t: Target = parse(params)?;
-                let user = self.client(&t)?.me()?;
-                Ok(json!({ "user": user }))
-            }
-            "issue.comments" => self.on_issue(params, "comments", Client::list_comments),
-            "issue.comment_update" => {
-                let p: CommentUpdateParams = parse(params)?;
-                self.client(&p.target)?.update_comment(
-                    &p.reference,
-                    &p.comment_id,
-                    &p.comment_html,
-                )?;
-                Ok(json!({ "ok": true }))
-            }
-            "issue.comment" => {
-                let p: CommentParams = parse(params)?;
-                self.client(&p.target)?.comment(&p.reference, &p.comment)?;
-                Ok(json!({ "ok": true }))
-            }
-            "issue.set_status" => {
-                let p: SetStatusParams = parse(params)?;
-                let status = Status::parse(&p.status)
-                    .ok_or_else(|| RpcError::params(format!("unknown status {:?}", p.status)))?;
-                let (issue, state) = self.client(&p.target)?.set_status(&p.reference, status)?;
-                Ok(json!({ "issue": issue, "state": state, "status": status }))
-            }
-            "relations.batch" => {
-                let p: BatchParams = parse(params)?;
-                let b = self
-                    .client(&p.target)?
-                    .relations_batch(&p.issue_ids, p.fresh);
-                Ok(
-                    json!({ "relations": b.relations, "errors": b.failed.len(), "cached": b.cached, "fetched": b.fetched }),
-                )
-            }
-            "cache.invalidate" => {
-                let p: InvalidateParams = parse(params)?;
-                let client = self.client(&p.target)?;
-                if p.issue_ids.is_empty() {
-                    client.clear_relations_cache();
-                } else {
-                    client.invalidate_relations(&p.issue_ids);
-                }
-                Ok(json!({ "ok": true }))
-            }
-            "project.archive" => self.end_project(params, Client::archive_project),
-            "project.delete" => self.end_project(params, Client::delete_project),
-            other => Err(RpcError {
-                code: METHOD_NOT_FOUND,
-                message: format!("unknown method {other:?}"),
-                kind: None,
-            }),
-        }
     }
 }
 
@@ -454,20 +377,7 @@ fn fnv1a(key: &(String, String, String)) -> u64 {
     hash
 }
 
-fn is_uuid(s: &str) -> bool {
-    let r = s.trim();
-    if r.len() != 36 || r.matches('-').count() != 4 {
-        return false;
-    }
-    let parts: Vec<&str> = r.split('-').collect();
-    if parts.len() != 5
-        || parts[0].len() != 8
-        || parts[1].len() != 4
-        || parts[2].len() != 4
-        || parts[3].len() != 4
-        || parts[4].len() != 12
-    {
-        return false;
-    }
-    r.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
-}
+/// Compiles the Rust examples of the crate README as doctests, so they cannot drift from the code.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

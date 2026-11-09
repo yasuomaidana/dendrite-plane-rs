@@ -88,8 +88,8 @@ fn a_project_is_required_somewhere() {
 }
 
 #[test]
-fn the_protocol_is_1_3_0() {
-    assert_eq!(PROTOCOL, "1.3.0");
+fn the_protocol_is_1_4_1() {
+    assert_eq!(PROTOCOL, "1.4.2");
 }
 
 #[rstest]
@@ -220,17 +220,25 @@ fn project_archive_and_delete_return_ok_and_map_unknown_project() {
     let mut server = Server::with_config(Config::new(&fake.url, "ws", "proj", "k").unwrap());
 
     // Both methods over the real stdio server return {"ok": true}
-    let r = call(&mut server, "project.archive", json!({}));
+    let r = call(
+        &mut server,
+        "project.archive",
+        json!({"project_id": "proj", "confirm": true}),
+    );
     assert_eq!(r["result"]["ok"], true);
 
-    let r = call(&mut server, "project.delete", json!({}));
+    let r = call(
+        &mut server,
+        "project.delete",
+        json!({"project_id": "proj", "confirm": true}),
+    );
     assert_eq!(r["result"]["ok"], true);
 
     // An unknown project (fake answers 404) returns an error with kind not_found
     let r = call(
         &mut server,
         "project.archive",
-        json!({"project_id": "unknown"}),
+        json!({"project_id": "unknown", "confirm": true}),
     );
     assert_eq!(r["error"]["code"], -32000);
     assert_eq!(r["error"]["data"]["kind"], "not_found");
@@ -238,14 +246,14 @@ fn project_archive_and_delete_return_ok_and_map_unknown_project() {
     let r = call(
         &mut server,
         "project.delete",
-        json!({"project_id": "unknown"}),
+        json!({"project_id": "unknown", "confirm": true}),
     );
     assert_eq!(r["error"]["code"], -32000);
     assert_eq!(r["error"]["data"]["kind"], "not_found");
 
     // The health result reports the new protocol version
     let r = call(&mut server, "health", json!({}));
-    assert_eq!(r["result"]["protocol"], "1.3.0");
+    assert_eq!(r["result"]["protocol"], "1.4.2");
     assert_eq!(r["result"]["protocol"], PROTOCOL);
 }
 
@@ -452,4 +460,80 @@ fn issue_labels_patch_protocol_method() {
     );
     assert_eq!(r["error"]["code"], -32000);
     assert_eq!(r["error"]["data"]["kind"], "not_found");
+}
+
+#[rstest]
+#[case("states.list", json!({"base_url": "http://attacker.example"}))]
+#[case("states.list", json!({"workspace": "a/../b"}))]
+#[case("states.list", json!({"project_id": "../x"}))]
+#[case("project.delete", json!({}))]
+#[case("project.delete", json!({"confirm": true}))]
+#[case("project.delete", json!({"project_id": "proj"}))]
+#[case("project.archive", json!({"project_id": "proj", "confirm": false}))]
+fn unsafe_targets_and_unconfirmed_ends_are_invalid_params(
+    mut offline: Server,
+    #[case] method: &str,
+    #[case] params: Value,
+) {
+    let r = call(&mut offline, method, params);
+    assert_eq!(r["error"]["code"], -32602, "{r}");
+}
+
+#[rstest]
+fn the_configured_origin_may_be_repeated(mut offline: Server) {
+    // Passes the origin check, then fails on the (closed) transport, not on the params.
+    let r = call(
+        &mut offline,
+        "states.list",
+        json!({"base_url": "http://127.0.0.1:9/"}),
+    );
+    assert_eq!(r["error"]["data"]["kind"], "transport");
+}
+
+#[rstest]
+#[case("http://evil.example", false)]
+#[case("http://127.0.0.1@evil.example", false)]
+#[case("ftp://127.0.0.1", false)]
+fn a_remote_base_url_is_refused_before_any_request(#[case] url: &str, #[case] _ok: bool) {
+    let mut server =
+        Server::with_config(Config::new("http://127.0.0.1:1", "ws", "proj", "k").unwrap());
+    let r = call(&mut server, "states.list", json!({"base_url": url}));
+    assert_eq!(r["error"]["code"], -32602);
+    assert!(r["error"]["message"].as_str().unwrap().contains("loopback"));
+}
+
+#[test]
+fn a_loopback_base_url_is_accepted_and_used() {
+    let state = fake_plane::FakeState::default();
+    let (fake, _) = fake_plane::Fake::with_routes(state);
+    // The configured origin is unreachable; the request names the loopback stand-in instead.
+    let mut server =
+        Server::with_config(Config::new("http://127.0.0.1:1", "ws", "proj", "k").unwrap());
+    let r = call(&mut server, "user.me", json!({"base_url": fake.url}));
+    assert_eq!(r["result"]["user"]["id"], "usr-1");
+}
+
+#[rstest]
+#[case("http://127.0.0.1:9")]
+#[case("http://localhost:9")]
+#[case("http://[::1]:9")]
+fn a_loopback_override_is_refused_when_the_configured_plane_is_remote(#[case] url: &str) {
+    let mut server =
+        Server::with_config(Config::new("https://plane.example.com", "ws", "proj", "k").unwrap());
+    let r = call(&mut server, "states.list", json!({"base_url": url}));
+    assert_eq!(r["error"]["code"], -32602, "{r}");
+    assert!(r["error"]["message"].as_str().unwrap().contains("loopback"));
+}
+
+#[rstest]
+fn a_workspace_override_changes_the_url_path() {
+    let fake = fake_plane::Fake::start(|_| fake_plane::json(r#"{"results":[]}"#));
+    let mut s = Server::with_config(Config::new(&fake.url, "ws", "proj", "k").unwrap());
+    let r = call(&mut s, "states.list", json!({"workspace": "other"}));
+    assert!(r.get("error").is_none(), "{r}");
+    assert!(
+        fake.recorded()[0]
+            .path_and_query
+            .starts_with("/api/v1/workspaces/other/")
+    );
 }

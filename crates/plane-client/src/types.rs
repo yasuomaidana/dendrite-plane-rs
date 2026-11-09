@@ -256,25 +256,88 @@ impl Status {
 /// mapping, identical to Go's `plane.StatusFor`: Cancelled and Blocked are matched before the group
 /// checks because Plane files Blocked under "started".
 pub fn status_for(group: &str, name: &str) -> Status {
-    let g = group.to_lowercase();
-    let n = name.to_lowercase();
-    if g == "cancelled" || n.contains("cancel") {
-        Status::Cancelled
-    } else if n.contains("block") {
-        Status::Blocked
-    } else if g == "completed" || n.contains("done") {
-        Status::Done
-    } else if n.contains("review") || n.contains("verif") {
-        Status::InReview
-    } else if g == "started" || n.contains("progress") || n.contains("active") {
-        Status::InProgress
-    } else if g == "backlog" || n.contains("backlog") {
-        Status::Backlog
-    } else if g == "unstarted" || n.contains("todo") || n.contains("to do") {
-        Status::Todo
-    } else {
-        Status::Backlog
+    // (status, state group, name fragments); the first rule that matches wins.
+    const RULES: [(Status, &str, &[&str]); 7] = [
+        (Status::Cancelled, "cancelled", &["cancel"]),
+        (Status::Blocked, "", &["block"]),
+        (Status::Done, "completed", &["done"]),
+        (Status::InReview, "", &["review", "verif"]),
+        (Status::InProgress, "started", &["progress", "active"]),
+        (Status::Backlog, "backlog", &["backlog"]),
+        (Status::Todo, "unstarted", &["todo", "to do"]),
+    ];
+    let (g, n) = (group.to_lowercase(), name.to_lowercase());
+    RULES
+        .iter()
+        .find(|(_, grp, frags)| {
+            (!grp.is_empty() && g == *grp) || frags.iter().any(|f| n.contains(f))
+        })
+        .map_or(Status::Backlog, |rule| rule.0)
+}
+
+/// True for a canonical 8-4-4-4-12 hexadecimal UUID, the only form that may be used as an issue id
+/// without a lookup.
+pub fn is_uuid(s: &str) -> bool {
+    let parts: Vec<&str> = s.trim().split('-').collect();
+    parts.len() == 5
+        && parts
+            .iter()
+            .zip([8, 4, 4, 4, 12])
+            .all(|(p, n)| p.len() == n && p.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
+/// True when `s` is safe to place in a URL path segment: letters, digits, `-` and `_` only.
+pub fn is_path_segment(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// The origin (`scheme://host[:port]`) of `url` when it is a plain `http`/`https` URL whose host is
+/// loopback (`localhost`, `127.0.0.0/8`, `::1`), and `None` for anything else: another host,
+/// userinfo (`http://127.0.0.1@evil.example`), a path, query or fragment, or a bad port.
+pub fn loopback_origin(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    let authority = rest.trim_end_matches('/');
+    if !matches!(scheme, "http" | "https") || authority.contains(['/', '?', '#', '@', '\\']) {
+        return None;
     }
+    let (host, port) = split_host_port(authority)?;
+    if !valid_port(port) || !is_loopback_host(host) {
+        return None;
+    }
+    let colon = if port.is_empty() { "" } else { ":" };
+    Some(format!(
+        "{scheme}://{}{colon}{port}",
+        host.to_ascii_lowercase()
+    ))
+}
+
+/// Splits `host[:port]` (a bracketed IPv6 host keeps its brackets); the port may be empty.
+fn split_host_port(authority: &str) -> Option<(&str, &str)> {
+    if authority.starts_with('[') {
+        let end = authority.find(']')?;
+        let tail = &authority[end + 1..];
+        let port = if tail.is_empty() {
+            ""
+        } else {
+            tail.strip_prefix(':')?
+        };
+        return Some((&authority[..=end], port));
+    }
+    Some(authority.split_once(':').unwrap_or((authority, "")))
+}
+
+fn valid_port(port: &str) -> bool {
+    port.is_empty() || (port.bytes().all(|b| b.is_ascii_digit()) && port.parse::<u16>().is_ok())
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    bare.eq_ignore_ascii_case("localhost")
+        || bare
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
 }
 
 #[cfg(test)]
@@ -323,5 +386,54 @@ mod tests {
         ] {
             assert_eq!(Status::parse(s.display_name()), Some(s));
         }
+    }
+
+    #[rstest::rstest]
+    #[case("123e4567-e89b-12d3-a456-426614174000", true)]
+    #[case("-/../../../../archive/-/-/-/-----", false)]
+    #[case("123e4567-e89b-12d3-a456-42661417400g", false)]
+    #[case("not-a-uuid", false)]
+    #[case("", false)]
+    fn is_uuid_accepts_only_canonical_uuids(#[case] input: &str, #[case] want: bool) {
+        assert_eq!(is_uuid(input), want);
+    }
+
+    #[rstest::rstest]
+    #[case("dendrite-ws", true)]
+    #[case("proj_1", true)]
+    #[case("a/b", false)]
+    #[case("..", false)]
+    #[case("a?b", false)]
+    #[case("", false)]
+    fn is_path_segment_rejects_separators(#[case] input: &str, #[case] want: bool) {
+        assert_eq!(is_path_segment(input), want);
+    }
+
+    #[rstest::rstest]
+    #[case("http://127.0.0.1:8090", Some("http://127.0.0.1:8090"))]
+    #[case("http://127.0.0.1:8090/", Some("http://127.0.0.1:8090"))]
+    #[case("http://localhost", Some("http://localhost"))]
+    #[case("HTTP://x", None)]
+    #[case("https://LOCALHOST:443", Some("https://localhost:443"))]
+    #[case("http://[::1]:3000", Some("http://[::1]:3000"))]
+    #[case("http://[::1]", Some("http://[::1]"))]
+    #[case("http://127.5.5.5:1", Some("http://127.5.5.5:1"))]
+    #[case("http://evil.example", None)]
+    #[case("http://127.0.0.1@evil.example", None)]
+    #[case("http://evil.example@127.0.0.1", None)]
+    #[case("http://127.0.0.1.evil.example", None)]
+    #[case("http://localhost.evil.example:80", None)]
+    #[case("http://127.0.0.1:99999", None)]
+    #[case("http://127.0.0.1:80x", None)]
+    #[case("http://127.0.0.1/api", None)]
+    #[case("http://127.0.0.1?x=1", None)]
+    #[case("ftp://127.0.0.1", None)]
+    #[case("file:///etc/passwd", None)]
+    #[case("", None)]
+    fn loopback_origin_accepts_only_plain_loopback_urls(
+        #[case] input: &str,
+        #[case] want: Option<&str>,
+    ) {
+        assert_eq!(loopback_origin(input).as_deref(), want);
     }
 }

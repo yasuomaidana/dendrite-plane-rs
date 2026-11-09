@@ -1,0 +1,66 @@
+# managed by dendrite — edit .github/dendrite/directives.toml
+name: Dendrite CI/CD
+
+on:
+  push:
+    branches: [ develop, main, "feature/**" ]
+  pull_request:
+    branches: [ develop, main, "feature/**" ]
+
+jobs:
+  quality:
+    name: Quality gates (loc, clones, complexity, structure)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache loom-gate
+        uses: actions/cache@v4
+        with:
+          path: '~/.cargo/bin/loom-gate'
+          key: 'loom-gate-${{ runner.os }}-${{ vars.LOOM_GATE_REF || ''develop'' }}'
+      - name: Install loom-gate
+        run: |
+          command -v loom-gate >/dev/null || cargo install --locked --git https://github.com/yasuomaidana/dendrite-rag-rs --branch "${{ vars.LOOM_GATE_REF || 'develop' }}" loom-gate
+      - name: 'Gate: loc'
+        run: |
+          loom-gate loc --format github
+      - name: 'Gate: clones'
+        run: |
+          loom-gate clones --format github
+      - name: 'Gate: complexity'
+        run: |
+          loom-gate complexity --format github
+      - name: 'Gate: structure'
+        run: |
+          loom-gate structure --format github
+      - name: 'Gate: rstest'
+        run: |
+          loom-gate rstest --format github
+  rust:
+    name: Rust
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy, llvm-tools-preview
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+      - name: Format
+        run: |
+          cargo fmt --all --check
+      - name: Lint (clippy, cognitive complexity limit from clippy.toml)
+        run: |
+          cargo clippy --workspace --all-targets -- -D warnings -W clippy::cognitive_complexity
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: 'Test with coverage floor (>= 100%)'
+        run: |
+          cargo llvm-cov --workspace --fail-under-lines 100
