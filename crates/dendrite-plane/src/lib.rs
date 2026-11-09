@@ -11,7 +11,7 @@ use plane_client::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-fn parse<T: for<'de> Deserialize<'de>>(params: Value) -> std::result::Result<T, RpcError> {
+fn parse<T: for<'de> Deserialize<'de>>(params: Value) -> Result<T, RpcError> {
     serde_json::from_value(params).map_err(|e| RpcError::params(e.to_string()))
 }
 
@@ -175,7 +175,7 @@ struct InvalidateParams {
 fn requested_origin(
     requested: Option<&str>,
     configured: &str,
-) -> std::result::Result<Option<String>, RpcError> {
+) -> Result<Option<String>, RpcError> {
     let Some(url) = requested.filter(|u| !u.is_empty()) else {
         return Ok(None);
     };
@@ -193,7 +193,7 @@ fn requested_origin(
 }
 
 pub struct Server {
-    base: std::result::Result<Config, Error>,
+    base: Result<Config, Error>,
     relations_ttl: std::time::Duration,
     cache_dir: Option<std::path::PathBuf>,
     clients: HashMap<(String, String, String), Client>,
@@ -230,7 +230,7 @@ impl Server {
         }
     }
 
-    fn target_config(&self, target: &Target) -> std::result::Result<Config, RpcError> {
+    fn target_config(&self, target: &Target) -> Result<Config, RpcError> {
         let base = self
             .base
             .as_ref()
@@ -261,7 +261,7 @@ impl Server {
         ))
     }
 
-    fn client(&mut self, target: &Target) -> std::result::Result<&Client, RpcError> {
+    fn client(&mut self, target: &Target) -> Result<&Client, RpcError> {
         let cfg = self.target_config(target)?;
         let key = (
             cfg.base_url.clone(),
@@ -323,7 +323,7 @@ impl Server {
         params: Value,
         key: &str,
         call: impl FnOnce(&Client, &str) -> plane_client::Result<T>,
-    ) -> std::result::Result<Value, RpcError> {
+    ) -> Result<Value, RpcError> {
         let p: RefParams = parse(params)?;
         let result = call(self.client(&p.target)?, &p.reference)?;
         let mut out = serde_json::Map::new();
@@ -336,7 +336,7 @@ impl Server {
         &mut self,
         params: Value,
         end: impl FnOnce(&Client) -> plane_client::Result<()>,
-    ) -> std::result::Result<Value, RpcError> {
+    ) -> Result<Value, RpcError> {
         let p: EndParams = parse(params)?;
         let t = p.target;
         // A destructive call names its project and says it means it; the default project is
@@ -358,7 +358,7 @@ impl Server {
         Ok(json!({ "ok": true }))
     }
 
-    fn dispatch(&mut self, method: &str, params: Value) -> std::result::Result<Value, RpcError> {
+    fn dispatch(&mut self, method: &str, params: Value) -> Result<Value, RpcError> {
         match method {
             "health" => Ok(json!({
                 "name": "dendrite-plane",

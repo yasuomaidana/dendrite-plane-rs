@@ -8,7 +8,7 @@ warn_at = 450
 exclude = ["**/generated/**"]
 
 [coverage]
-min_percent = 85.0
+min_percent = 100.0
 scope = "line"
 exclude = []
 
