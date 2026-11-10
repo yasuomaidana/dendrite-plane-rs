@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- CI: every workflow runs on every pull request, whatever its target branch (`ci.yml` no longer lists `develop`, `main` and `feature/**`); pushes still run on `develop`, `main` and `feature/**` (DPLANE-22).
 - CI: `.github/workflows/complexity.yml` cross-checks function complexity with clippy `cognitive_complexity` and `lizard`; report only while DPLANE-11 is open (DPLANE-10).
 
 ## [0.1.0]
