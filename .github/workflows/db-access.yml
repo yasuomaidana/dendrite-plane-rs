@@ -1,0 +1,21 @@
+# Every database goes through Diesel (see "Database access" in the README). Runs on every pull request,
+# whatever its target branch, and on pushes to develop and main.
+name: db-access (diesel only)
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+
+jobs:
+  db-access:
+    name: db-access (diesel only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Guard self-test
+        run: sh scripts/tests/check-db-access.test.sh
+      - name: Diesel-only check
+        run: sh scripts/check-db-access.sh

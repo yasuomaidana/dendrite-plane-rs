@@ -1,0 +1,3 @@
+# Exceptions to the Diesel-only rule, one per line, each with a reason:
+#   manifest:<path/to/Cargo.toml> <reason>
+#   source:<path prefix> <reason>
