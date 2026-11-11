@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Database access policy: `scripts/check-db-access.sh` and the CI job `db-access (diesel only)` fail when a manifest declares a database driver without Diesel, when sources use `rusqlite::`, `sqlx::` or `sea_orm::`, or when `sql_query` is called outside a `raw` module; exceptions go in `.github/db-access-allow.txt` with a reason (DPLANE-21).
+- CI: every workflow runs on every pull request, whatever its target branch (`ci.yml` no longer lists `develop`, `main` and `feature/**`); pushes still run on `develop`, `main` and `feature/**` (DPLANE-22).
 - CI: `.github/workflows/complexity.yml` cross-checks function complexity with clippy `cognitive_complexity` and `lizard`; report only while DPLANE-11 is open (DPLANE-10).
 
 ## [0.1.0]
