@@ -51,6 +51,12 @@ run_case "workflow checks out develop" fail \
     'printf "steps:\n  - uses: actions/checkout@v4\n    with:\n      ref: develop\n" > .github/workflows/ci.yml'
 run_case "workflow defaults a ref to develop" fail \
     'printf "      ref: ${REF:-develop}\n" > .github/workflows/ci.yml'
+run_case "workflow installs a tool from a develop branch" fail \
+    'printf "      run: cargo install --git https://github.com/o/x --branch develop\n" > .github/workflows/ci.yml'
+run_case "workflow installs a tool from a tag" pass \
+    'printf "      run: cargo install --git https://github.com/o/x --tag v0.1.0\n" > .github/workflows/ci.yml'
+run_case "workflow triggers on develop pushes" pass \
+    'printf "on:\n  push:\n    branches: [develop, main]\n" > .github/workflows/ci.yml'
 run_case "markdown links to main" pass \
     'printf "[a](https://github.com/o/x/blob/main/a.md)\n" > README.md'
 run_case "markdown links to develop" fail \

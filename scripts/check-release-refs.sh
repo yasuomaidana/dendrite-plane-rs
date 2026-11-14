@@ -4,7 +4,7 @@
 # Fails when
 #   * a Cargo.toml git dependency has no tag = "vX.Y.Z" and is not on branch = "main";
 #   * a git dependency names a rev, or a branch other than main;
-#   * a workflow checks out a repository with `ref:` develop;
+#   * a workflow checks out or installs from a develop ref (`ref:`, `--branch`, a *_REF variable defaulting to it);
 #   * a Markdown or workflow file links to a develop branch (blob/develop, tree/develop, raw/develop).
 #
 # Usage: scripts/check-release-refs.sh [root]   (default: the current directory)
@@ -60,12 +60,12 @@ while IFS= read -r manifest; do
     ' "$manifest" >"$tmp" 2>&1 || while IFS="$(printf '\t')" read -r f msg; do report "$f" "$msg"; done <"$tmp"
 done <"$tmp.list"
 
-# Workflows: no checkout of a develop ref.
+# Workflows: no develop ref (checkout ref:, cargo install --branch, a *_REF variable defaulting to develop).
 files '.github/workflows/*.yml' '.github/workflows/*.yaml' >"$tmp.list"
 while IFS= read -r wf; do
     [ -f "$wf" ] || continue
-    n=$(grep -nE "^[[:space:]]*(-[[:space:]]*)?ref:.*develop" "$wf" | head -1 | cut -d: -f1)
-    [ -n "$n" ] && report "$wf" "line $n: checks out a develop ref; use a release tag or main"
+    n=$(grep -nE "(ref:|--branch|--rev|_REF).*develop" "$wf" | grep -v "^[0-9]*:[[:space:]]*#" | head -1 | cut -d: -f1)
+    [ -n "$n" ] && report "$wf" "line $n: names a develop ref; use a release tag or main"
 done <"$tmp.list"
 
 # Documentation and workflow links to a develop branch.
