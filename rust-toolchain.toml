@@ -1,0 +1,6 @@
+# Pinned to the toolchain of the last green CI run (2026-11-11). rustc 1.100.0 (stable since 2026-11-09) counts
+# coverage regions and lines differently and fails the 100% line floor on unchanged code. Raise the pin together with
+# the tests that restore the floor (see the coverage ticket), never by lowering the floor.
+[toolchain]
+channel = "1.99.1"
+components = ["rustfmt", "clippy", "llvm-tools-preview"]
