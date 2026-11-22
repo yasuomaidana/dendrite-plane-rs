@@ -1,3 +1,8 @@
 target/
 .dendrite/rag/
 .dendrite/
+coverage.out
+*.tmp
+bin/
+.venv/
+node_modules/
