@@ -17,7 +17,7 @@ fn parse<T: for<'de> Deserialize<'de>>(params: Value) -> Result<T, RpcError> {
 }
 
 /// Protocol version. Clients must reject a server whose major version differs from theirs.
-pub const PROTOCOL: &str = "1.4.2";
+pub const PROTOCOL: &str = "1.5.0";
 
 const PARSE_ERROR: i64 = -32700;
 const INVALID_REQUEST: i64 = -32600;

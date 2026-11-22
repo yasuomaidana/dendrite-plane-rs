@@ -324,7 +324,8 @@ impl Client {
             .find(|i| i.external_id.as_deref() == Some(external_id)))
     }
 
-    /// Changes only the fields that are set (an empty string counts as unset, like the Go client).
+    /// Changes only the fields that are set. An empty string counts as unset for the text fields, and clears
+    /// the dates and the parent (it is sent as `null`).
     pub fn update_issue(&self, reference: &str, req: &UpdateIssue) -> Result<Issue> {
         let id = self.issue_id(reference)?;
         let mut body = serde_json::Map::new();
@@ -333,7 +334,7 @@ impl Client {
         put_text(&mut body, "state", &req.state);
         put_text(&mut body, "priority", &req.priority);
         put_estimate(&mut body, req.estimate_point);
-        put_dates(&mut body, &req.start_date, &req.target_date, &req.parent);
+        put_clearable(&mut body, &req.start_date, &req.target_date, &req.parent);
         if let Some(assignees) = &req.assignees {
             body.insert("assignees".into(), assignees.clone().into());
         }
@@ -389,8 +390,21 @@ fn put_estimate(body: &mut serde_json::Map<String, serde_json::Value>, v: Option
     }
 }
 
-/// Dates and parent are sent whenever set, even empty, so a caller can clear them like in Go.
+/// A new issue sends the dates and the parent only when they hold a value.
 fn put_dates(
+    body: &mut serde_json::Map<String, serde_json::Value>,
+    start: &Option<String>,
+    target: &Option<String>,
+    parent: &Option<String>,
+) {
+    put_text(body, "start_date", start);
+    put_text(body, "target_date", target);
+    put_text(body, "parent", parent);
+}
+
+/// An update sends the dates and the parent when they are set; an empty string is sent as JSON `null`,
+/// which is how Plane clears them (it rejects `""`). An unset field is left out.
+fn put_clearable(
     body: &mut serde_json::Map<String, serde_json::Value>,
     start: &Option<String>,
     target: &Option<String>,
@@ -402,7 +416,12 @@ fn put_dates(
         ("parent", parent),
     ] {
         if let Some(s) = v {
-            body.insert(key.into(), s.clone().into());
+            let value = if s.is_empty() {
+                serde_json::Value::Null
+            } else {
+                s.clone().into()
+            };
+            body.insert(key.into(), value);
         }
     }
 }
