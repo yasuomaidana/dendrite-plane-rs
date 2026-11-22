@@ -976,6 +976,61 @@ fn update_issue_replaces_assignees_and_labels_and_preserves_unset() {
     assert!(b.get("description_html").is_none());
 }
 
+#[test]
+fn update_issue_clears_parent_and_dates_with_null() {
+    let fake = Fake::start(|_| json(&format!(r#"{{"id":"{UUID}","name":"ok"}}"#)));
+    let c = client(&fake);
+
+    let upd = UpdateIssue {
+        parent: Some(String::new()),
+        start_date: Some(String::new()),
+        target_date: Some("2026-12-01".into()),
+        ..UpdateIssue::default()
+    };
+    c.update_issue(UUID, &upd).unwrap();
+
+    let b = body_of(&fake, "PATCH");
+    assert!(b["parent"].is_null() && b.get("parent").is_some());
+    assert!(b["start_date"].is_null() && b.get("start_date").is_some());
+    assert_eq!(b["target_date"], "2026-12-01");
+}
+
+#[rstest]
+fn create_issue_leaves_empty_parent_and_dates_out(mut new_issue: CreateIssue) {
+    let fake = Fake::start(|_| json(&format!(r#"{{"id":"{UUID}","name":"x"}}"#)));
+    let c = client(&fake);
+    new_issue.parent = Some(String::new());
+    new_issue.start_date = Some(String::new());
+
+    c.create_issue(&new_issue).unwrap();
+
+    let b = body_of(&fake, "POST");
+    assert!(b.get("parent").is_none() && b.get("start_date").is_none());
+}
+
+#[test]
+fn update_issue_leaves_an_unset_parent_out() {
+    let fake = Fake::start(|_| json(&format!(r#"{{"id":"{UUID}","name":"ok"}}"#)));
+    let c = client(&fake);
+
+    let upd = UpdateIssue {
+        parent: Some("p-1".into()),
+        ..UpdateIssue::default()
+    };
+    c.update_issue(UUID, &upd).unwrap();
+    assert_eq!(body_of(&fake, "PATCH")["parent"], "p-1");
+
+    c.update_issue(UUID, &UpdateIssue::default()).unwrap();
+    let last = fake
+        .recorded()
+        .into_iter()
+        .rev()
+        .find(|r| r.method == "PATCH")
+        .unwrap();
+    let b: serde_json::Value = serde_json::from_str(&last.body).unwrap();
+    assert!(b.get("parent").is_none() && b.get("start_date").is_none());
+}
+
 /// A Plane like the self-hosted one: a single-issue read gives the state as a bare id.
 fn plane_with_bare_state_ids(issue_body: String) -> Fake {
     Fake::start(move |req| {

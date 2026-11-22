@@ -89,7 +89,7 @@ fn a_project_is_required_somewhere() {
 
 #[test]
 fn the_protocol_is_1_4_1() {
-    assert_eq!(PROTOCOL, "1.4.2");
+    assert_eq!(PROTOCOL, "1.5.0");
 }
 
 #[rstest]
@@ -253,7 +253,7 @@ fn project_archive_and_delete_return_ok_and_map_unknown_project() {
 
     // The health result reports the new protocol version
     let r = call(&mut server, "health", json!({}));
-    assert_eq!(r["result"]["protocol"], "1.4.2");
+    assert_eq!(r["result"]["protocol"], "1.5.0");
     assert_eq!(r["result"]["protocol"], PROTOCOL);
 }
 

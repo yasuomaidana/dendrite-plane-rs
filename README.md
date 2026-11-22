@@ -36,7 +36,7 @@ The token is never defaulted and never sent over the protocol.
 | `DENDRITE_PLANE_RELATIONS_TTL_SECS` | Relations cache lifetime, default 60. |
 | `DENDRITE_PLANE_CACHE_DIR` | When set, the relations cache is also kept in a file there, shared by every process (short-lived CLI runs each start their own sidecar). |
 
-## Protocol 1.4.2
+## Protocol 1.5.0
 
 Every method that touches Plane accepts the optional `base_url`, `workspace` and `project_id`. `base_url` may only repeat the configured `PLANE_BASE_URL` or name a loopback address (`localhost`, `127.0.0.0/8`, `::1`) when the configured one is itself loopback (the API key is never sent to another host), and `workspace` and `project_id` must be plain identifiers (letters, digits, `-`, `_`). Errors use JSON-RPC codes `-32700`, `-32600`, `-32601`, `-32602`; engine failures are `-32000` with `data.kind` one of `config`, `unauthorized`, `http`, `not_found`, `invalid`, `transport`, `decode`. Each method has a JSON Schema in [`proto/`](proto/), checked by a test.
 
@@ -49,7 +49,7 @@ Every method that touches Plane accepts the optional `base_url`, `workspace` and
 | `issue.resolve` | `{ref}` | `{issue}`; `ref` is `DEN-n`, the Plane number or the UUID, never matched by substring |
 | `issue.get` | `{ref}` | `{issue}` with description, labels and state detail; a UUID is read directly, `DEN-n` or a Plane number is resolved through one list (1.1) |
 | `issue.create` | `{name, description_html, state?, estimate_point?, priority?, start_date?, target_date?, parent?, external_id?, external_source?, labels?}` | `{issue, created}`; with `external_id` set it is idempotent: an issue already carrying it is returned with `created: false` and nothing is posted (a 409 counts too). Estimates clamp to 0..12; an empty name or description is `invalid` (1.1) |
-| `issue.update` | `{ref, name?, description_html?, state?, estimate_point?, priority?, start_date?, target_date?, parent?, assignees?, labels?}` | `{issue}`; only set fields are sent, empty strings count as unset; `assignees` is a list of user UUIDs; `labels` accepts names (auto-resolved) or UUIDs (1.3) |
+| `issue.update` | `{ref, name?, description_html?, state?, estimate_point?, priority?, start_date?, target_date?, parent?, assignees?, labels?}` | `{issue}`; only set fields are sent, empty strings count as unset except for `parent`, `start_date` and `target_date`, where `""` clears the field (sent to Plane as `null`) (1.5); `assignees` is a list of user UUIDs; `labels` accepts names (auto-resolved) or UUIDs (1.3) |
 | `issue.labels_patch` | `{ref, add: [names], remove_prefixes: [strings]}` | `{issue, labels}`; drops labels matching remove prefixes, adds names (idempotent, default colour "#7C3AED") (1.3) |
 | `user.me` | none | `{user: {id, email, display_name}}` (1.3) |
 | `issue.comments` | `{ref}` | `{comments: [{id, comment_html, created_at, updated_at}]}`, oldest first (1.3) |

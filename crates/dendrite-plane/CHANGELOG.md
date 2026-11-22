@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Protocol 1.5.0: `issue.update` clears `parent`, `start_date` and `target_date` when they are an empty string; the field is sent to Plane as `null`, which is the only value Plane accepts for that. `issue.create` leaves empty values out ([DPLANE-26]).
+
 ### Security
 - Protocol 1.4.2: a loopback `base_url` override is accepted only when the configured `PLANE_BASE_URL` is itself loopback, so a request can no longer send the API key to a local listener while Plane is remote ([DPLANE-20]). `comment_id` (`issue.comment_update`) and the issue ids of `relations.batch` must be plain identifiers, so `../` cannot reach another authenticated route ([DPLANE-19]).
 

@@ -47,15 +47,15 @@
       },
       "start_date": {
         "type": "string",
-        "description": "New start date (YYYY-MM-DD)"
+        "description": "New start date (YYYY-MM-DD); an empty string clears it"
       },
       "target_date": {
         "type": "string",
-        "description": "New due / target date (YYYY-MM-DD)"
+        "description": "New due / target date (YYYY-MM-DD); an empty string clears it"
       },
       "parent": {
         "type": "string",
-        "description": "New parent issue UUID"
+        "description": "New parent issue UUID; an empty string removes the parent"
       },
       "assignees": {
         "type": "array",
