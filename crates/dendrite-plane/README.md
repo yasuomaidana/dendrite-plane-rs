@@ -36,7 +36,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"health","params":{}}' | cargo run -q -p 
 Expected stdout output (`configured` is `true` when `PLANE_API_KEY` is set in the environment):
 
 ```json
-{"id":1,"jsonrpc":"2.0","result":{"configured":false,"features":[],"name":"dendrite-plane","protocol":"1.5.0","version":"0.1.0"}}
+{"id":1,"jsonrpc":"2.0","result":{"configured":false,"features":[],"name":"dendrite-plane","protocol":"1.5.0","version":"0.2.0"}}
 ```
 
 ### Main types
