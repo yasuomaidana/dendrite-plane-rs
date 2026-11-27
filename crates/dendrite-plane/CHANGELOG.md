@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-26
+
 ### Added
 - Protocol 1.5.0: `issue.update` clears `parent`, `start_date` and `target_date` when they are an empty string; the field is sent to Plane as `null`, which is the only value Plane accepts for that. `issue.create` leaves empty values out ([DPLANE-26]).
 

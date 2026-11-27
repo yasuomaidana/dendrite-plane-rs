@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-26
+
+### Changed
+- CI installs `loom-gate` from dendrite-rag-rs `v0.2.0`, the first release without the BUSL-1.1 oxillama backend (DPLANE-27).
+
 ### Added
 - Database access policy: `scripts/check-db-access.sh` and the CI job `db-access (diesel only)` fail when a manifest declares a database driver without Diesel, when sources use `rusqlite::`, `sqlx::` or `sea_orm::`, or when `sql_query` is called outside a `raw` module; exceptions go in `.github/db-access-allow.txt` with a reason (DPLANE-21).
 - CI: every workflow runs on every pull request, whatever its target branch (`ci.yml` no longer lists `develop`, `main` and `feature/**`); pushes still run on `develop`, `main` and `feature/**` (DPLANE-22).
